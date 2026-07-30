@@ -50,6 +50,7 @@ s6-rc-db -c <db> all-dependencies init-custom-files | grep -x init-selkies-confi
 | `02-nvidia-proc-unmount.sh` | desktop | [Restore `/proc` for bwrap](#nvidia-proc-overmount-breaks-flatpak) |
 | `03-nvidia-flatpak-gl.sh` | desktop | [Match the host driver](#nvidia-flatpak-gl-extension) |
 | `04-no-gpu.sh` | coder | [Neutralise the GPU autodetect](#neutralising-the-gpu-autodetect) |
+| `05-unpriv-passwd.sh` | coder, `UNPRIVILEGED=true` only | [A passwd entry for an arbitrary uid](unprivileged.md#what-the-image-changes) |
 
 ## base
 
@@ -305,3 +306,63 @@ probe](troubleshooting.md#blank-flat-colour-desktop-the-compositors-gpu-probe).
 `LIBGL_ALWAYS_SOFTWARE=1` keeps *applications* off the driverless render node too. It is
 defence in depth, not part of the fix — on its own it does nothing for the blank stream,
 because the compositor's probe is Rust/Smithay talking to GBM directly, not mesa GL.
+
+### Sandboxing for Chromium and VS Code
+
+`chrome-sandbox` is not setuid in the base, and a seccomp filter blocks the user-namespace
+fallback, so both abort or fail to start wherever a filter is active — which includes a
+stock `docker run` (`Seccomp: 2`), not just a restricted pod.
+
+The base's own `wrapped-chromium` already tests `/proc/1/status` for `Seccomp: 0` and adds
+`--no-sandbox --test-type` when a filter is present, but only for its own menu launcher.
+This stage extends the identical test to the two paths it misses: an appended
+`/etc/chromium/chromium.conf` line, so a bare `chromium-browser` behaves like the launcher,
+and a `/usr/local/bin/code` wrapper that the `code` desktop entries are repointed at
+(`/usr/local/sbin` is a symlink to `bin`, so it wins in `PATH` too).
+
+Deciding at runtime rather than baking the flag in is the point: **a privileged container
+keeps its sandbox**. Do not simplify these to an unconditional `--no-sandbox`.
+
+### No HTTP basic auth
+
+The base turns `PASSWORD` into an `/etc/nginx/.htpasswd` entry and switches `auth_basic`
+on for both listeners. Coder already authenticates every request at its proxy before it
+reaches the workspace, so that is a second login prompt guarding a port only Coder can
+route to. The `PASSWORD` block and the four commented `auth_basic` lines it uncomments
+are removed from this stage, which makes `PASSWORD` and `CUSTOM_USER` inert here. The
+consequence to be deliberate about: run this image standalone with `:3000` published and
+there is no password in front of it — the desktop is only as private as the network path
+to it.
+
+Worth knowing about the mechanism that goes with them: enabling basic auth is a blanket
+`sed -i 's/#//g'` over the rendered config. Nothing else in the file is commented today,
+so it does exactly what it means to — and would silently enable anything a future base
+happens to comment out.
+
+### TLS material lives in /run
+
+The base self-signs a certificate into `/config/ssl` on first start and reuses whatever
+it finds there afterwards. `/config` is the user's mount, which makes an ephemeral
+service credential part of the persisted workspace: a volume that came from another uid
+leaves `cert.key` (mode 600) unreadable, and a `/config` the session cannot write to
+means no certificate at all. Either way nginx fails to load it and exits — and nginx
+failing takes the desktop with it, because the stream is served through it.
+
+This stage generates into `/run/ssl` instead, so the certificate is created fresh each
+start by whichever uid is running, and no deployment has to reason about a volume's
+history. `/run` is already required to be writable — [an `emptyDir` on it is fatal to
+omit](unprivileged.md#what-the-deployment-must-supply) — so this needs nothing new from
+the deployment.
+
+The other stages keep `/config/ssl`: there the certificate is one a human accepts an
+exception for in a browser, and regenerating it on every restart re-prompts them.
+
+### Running unprivileged
+
+`UNPRIVILEGED=true` builds this stage to run as any non-root uid with no capabilities.
+It is off by default because it makes `PUID`/`PGID` inert and relaxes group permissions on
+paths the init scripts write. What it changes, what the deployment must supply, and why
+`SETUID`/`SETGID` cannot help: [unprivileged.md](unprivileged.md).
+
+The `svc-selkies` `PULSE_RUNTIME_PATH` patch is applied to this stage **unconditionally**,
+because it is a strict generalisation — unset, the behaviour is byte-identical to upstream.

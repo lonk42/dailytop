@@ -106,6 +106,7 @@ anyway.
 | `05-unpriv-passwd.sh` hook | An arbitrary uid has no `passwd` entry, and `getpwuid()` failures surface obscurely in plasmashell, dbus and ssh |
 | `svc-selkies` honours `PULSE_RUNTIME_PATH` | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
 | Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
+| nginx self-signs into `/run/ssl`, not `/config/ssl` | Applied unconditionally. A key left in the workspace volume by another uid is unreadable to this one, and nginx exits rather than start without it; see [image-design.md](image-design.md#tls-material-lives-in-run) |
 
 `UNPRIVILEGED_PATHS` is a build arg. **Extending it is the fix for any new "Permission
 denied" from an init script** — that is the intended maintenance path, not patching the

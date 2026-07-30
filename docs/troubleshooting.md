@@ -290,6 +290,42 @@ ensure an OCI runtime is present. Both are handled by the `INSTALL_DIND` build a
 
 ---
 
+## nginx exits on the certificate in `/config`
+
+**Symptom:** no desktop and no stream at all; `docker logs` / `kubectl logs` end with
+
+```
+nginx: [emerg] cannot load certificate "/config/ssl/cert.pem": BIO_new_file() failed
+```
+
+or `cannot load certificate key … Permission denied`. nginx serves the stream, so nginx
+refusing to start looks like the whole image is broken.
+
+**Cause:** the base self-signs into `/config/ssl` on first start and reuses whatever it
+finds there. `/config` is the user's volume, so the certificate outlives the container
+and its ownership does not have to match the uid now running:
+
+- a volume written by an earlier deployment under a different uid leaves `cert.key`
+  (mode 600) unreadable — the `Permission denied` form, and the one arbitrary-uid
+  platforms hit;
+- a `/config` the session cannot write to means the `openssl req` never produced a
+  certificate — the `BIO_new_file()` form.
+
+**Check** which it is before changing anything:
+
+```bash
+kubectl exec <pod> -- ls -ln /config/ssl   # missing, or owned by a uid that is not yours
+kubectl exec <pod> -- id
+```
+
+**Fix:** delete `/config/ssl` and restart — the init script regenerates it under the
+current uid. The `coder` stage sidesteps the class entirely by generating into `/run/ssl`
+instead; see [TLS material lives in
+/run](image-design.md#tls-material-lives-in-run). On `full` and `k8s` the certificate
+stays in `/config` deliberately, so a browser exception survives a restart.
+
+---
+
 ## "Waiting for stream" — the VAAPI fd leak
 
 Historical, on the Intel/VAAPI path: plain `x264enc` (VAAPI) **leaked

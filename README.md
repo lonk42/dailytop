@@ -46,7 +46,7 @@ catches up instead of silently degenerating.
 | `desktop` | `base` + a human-facing desktop. | KDE lock screen, flatpak + Flathub, Spotify, claude-desktop |
 | `full` | `desktop` + a workstation toolchain. | Docker-in-Docker, sshd, yakuake, runtime password setup |
 | `k8s` | `desktop` + NVIDIA wiring for a cluster. | VAAPI/NVDEC for Firefox, glvnd EGL-on-X11 configs, no DinD/sshd |
-| `coder` | A [Coder](https://coder.com) workspace. | `base` + the Coder agent as an s6 service; GPU-less, no lock screen, no flatpaks |
+| `coder` | A [Coder](https://coder.com) workspace. | `base` + the Coder agent as an s6 service; GPU-less, no lock screen, no flatpaks, no HTTP basic auth |
 
 ```
 base ──> desktop ──> full
@@ -119,7 +119,10 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
   inline and commented out.
 - **Kubernetes** (`k8s` target) — [`examples/k8s/dailytop.yaml`](examples/k8s/dailytop.yaml).
 - **Coder** (`coder` target) —
-  [`examples/coder-template/main.tf`](examples/coder-template/main.tf).
+  [`examples/coder-template/main.tf`](examples/coder-template/main.tf). Coder
+  authenticates at its proxy, so this variant drops webtop's own basic auth
+  (`PASSWORD`/`CUSTOM_USER` are inert) and self-signs its nginx certificate into `/run`
+  rather than the workspace volume.
 
 `shm_size: "2gb"` (or a 2 GiB `/dev/shm` `emptyDir`) is required — Chromium and Electron
 apps crash on Docker's 64 MB default. On Kubernetes,
@@ -166,6 +169,7 @@ stage on demand, with an `unprivileged` checkbox and the option to skip the push
 | [docs/building.md](docs/building.md) | Build args, `build.sh`, the flatpak entitlement |
 | [docs/image-design.md](docs/image-design.md) | What each stage does and why |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptoms, causes, fixes |
+| [docs/unprivileged.md](docs/unprivileged.md) | Running as a non-root uid with no capabilities |
 | [docs/selkies-layer-analysis.md](docs/selkies-layer-analysis.md) | What LinuxServer's layer adds on top of selkies, and where the lag comes from |
 | [certs/README.md](certs/README.md) | Mounting extra root CAs |
 

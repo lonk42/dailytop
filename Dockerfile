@@ -596,6 +596,33 @@ RUN grep -q 'until \[ -f /defaults/pid \]; do' /etc/s6-overlay/s6-rc.d/svc-selki
 	grep -q 'until \[ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" \]; do' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
 	bash -n /etc/s6-overlay/s6-rc.d/svc-selkies/run
 
+# Coder authenticates every request at its proxy, so the base's HTTP basic auth is a
+# second login for nothing, and the sed that enables it uncomments blindly. PASSWORD and
+# CUSTOM_USER are inert here. docs/image-design.md#no-http-basic-auth
+RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
+	grep -q 'if \[ ! -z \${PASSWORD+x} \]; then' "$NGINX_INIT" && \
+	grep -q 'CUSER="\${CUSTOM_USER:-abc}"' "$NGINX_INIT" && \
+	sed -i \
+		-e '/if \[ ! -z \${PASSWORD+x} \]; then/,/^fi$/d' \
+		-e '/CUSER="\${CUSTOM_USER:-abc}"/d' \
+		"$NGINX_INIT" && \
+	! grep -q 'PASSWORD\|CUSTOM_USER\|htpasswd' "$NGINX_INIT" && \
+	bash -n "$NGINX_INIT" && \
+	[ "$(grep -c auth_basic /defaults/default.conf)" = "4" ] && \
+	sed -i '/auth_basic/d' /defaults/default.conf && \
+	! grep -q auth_basic /defaults/default.conf
+
+# The base self-signs into /config/ssl, inside the user's mount, where a volume carried
+# over from another uid leaves nginx unable to read the key -- and nginx failing takes the
+# desktop with it. Regenerated in /run each start. docs/image-design.md#tls-material-lives-in-run
+RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
+	grep -q 'if \[ ! -f "/config/ssl/cert.pem" \]; then' "$NGINX_INIT" && \
+	[ "$(grep -c /config/ssl "$NGINX_INIT")" = "6" ] && \
+	[ "$(grep -c /config/ssl /defaults/default.conf)" = "2" ] && \
+	sed -i 's|/config/ssl|/run/ssl|g' "$NGINX_INIT" /defaults/default.conf && \
+	! grep -q /config/ssl "$NGINX_INIT" /defaults/default.conf && \
+	bash -n "$NGINX_INIT"
+
 # Runs the whole session as a non-root uid with no capabilities, for clusters enforcing a
 # restricted pod security policy. Off by default: it makes PUID/PGID inert and relaxes group
 # permissions on paths the init scripts write. docs/unprivileged.md
