@@ -554,6 +554,39 @@ ENV SELKIES_AUTO_GPU=false
 ENV AUTO_GPU=false
 ENV LIBGL_ALWAYS_SOFTWARE=1
 
+# Chromium and Electron cannot sandbox where chrome-sandbox is not setuid and the seccomp
+# filter blocks the userns fallback. The base's wrapped-chromium already covers the menu
+# launcher; these two cover the CLI and VS Code, reusing its runtime seccomp test so a
+# privileged container keeps its sandbox. docs/unprivileged.md#chromium-and-vs-code
+RUN cat > /tmp/chromium-nosandbox.conf <<'EOF'
+
+# Mirrors wrapped-chromium: under a seccomp filter no sandbox is available here.
+grep -q 'Seccomp:.0' /proc/1/status || CHROMIUM_FLAGS+=" --no-sandbox --test-type"
+EOF
+RUN grep -q 'CHROMIUM_FLAGS' /etc/chromium/chromium.conf && \
+	cat /tmp/chromium-nosandbox.conf >> /etc/chromium/chromium.conf && \
+	rm -f /tmp/chromium-nosandbox.conf && \
+	bash -n /etc/chromium/chromium.conf && \
+	grep -q 'no-sandbox --test-type' /etc/chromium/chromium.conf
+
+# Shadows /usr/bin/code, which is earlier in PATH, and is what the desktop entries below
+# are repointed at -- so the terminal and the menu take the same path.
+RUN cat > /usr/local/bin/code <<'EOF'
+#!/bin/bash
+BIN=/usr/share/code/bin/code
+if grep -q 'Seccomp:.0' /proc/1/status; then
+  exec "$BIN" "$@"
+fi
+exec "$BIN" --no-sandbox "$@"
+EOF
+RUN chmod 0755 /usr/local/bin/code && \
+	bash -n /usr/local/bin/code && \
+	for f in /usr/share/applications/code.desktop /usr/share/applications/code-url-handler.desktop; do \
+		grep -q '^Exec=/usr/share/code/code' "$f" && \
+		sed -i 's|^Exec=/usr/share/code/code|Exec=/usr/local/bin/code|' "$f" && \
+		! grep -q '^Exec=/usr/share/code/code' "$f" || exit 1; \
+	done
+
 # svc-selkies busy-waits on pulseaudio's pidfile at a path hardcoded to match the base's
 # baked PULSE_RUNTIME_PATH=/defaults. Honour the variable so a deployment can move the
 # runtime dir; unchanged when it is unset. docs/unprivileged.md#pulseaudio

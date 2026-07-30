@@ -105,6 +105,7 @@ anyway.
 | `s6-setuidgid` shim | See above |
 | `05-unpriv-passwd.sh` hook | An arbitrary uid has no `passwd` entry, and `getpwuid()` failures surface obscurely in plasmashell, dbus and ssh |
 | `svc-selkies` honours `PULSE_RUNTIME_PATH` | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
+| Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
 
 `UNPRIVILEGED_PATHS` is a build arg. **Extending it is the fix for any new "Permission
 denied" from an init script** — that is the intended maintenance path, not patching the
@@ -177,9 +178,40 @@ rather than as failures:
   upstream telling you it could not chown a path it does not need to own. The build-time
   group permissions are what make the paths usable.
 
-Also expect Chromium and Electron (VS Code) to need `--no-sandbox` or working
-unprivileged user namespaces: their `chrome-sandbox` helper is setuid and therefore inert
-under `NoNewPrivs`. Firefox's sandbox does not use setuid and is unaffected.
+## Chromium and VS Code
+
+Neither can sandbox here, and it is worth being precise about why, because two separate
+mechanisms are closed at once:
+
+- `chrome-sandbox` ships **not setuid** (`-rwxr-xr-x`), and `allowPrivilegeEscalation:
+  false` sets `NoNewPrivs`, so the SUID sandbox could not work even if it were.
+- The namespace sandbox is unavailable too: `unshare -Ur` returns `Operation not
+  permitted` despite `unprivileged_userns_clone=1`, because the `RuntimeDefault` seccomp
+  profile blocks `unshare`. That is seccomp, not the capability drop.
+
+Bare Chromium therefore aborts outright:
+
+```
+FATAL: The SUID sandbox helper binary was found, but is not configured correctly.
+Rather than run without sandboxing I'm aborting now.
+```
+
+The base already handles its own menu launcher — `wrapped-chromium` tests
+`/proc/1/status` for `Seccomp: 0` and adds `--no-sandbox --test-type` when a filter is
+active. The image extends the same runtime test to the two paths it misses:
+`/etc/chromium/chromium.conf` (so a bare `chromium-browser` behaves like the launcher) and
+a `/usr/local/bin/code` wrapper that the `code` desktop entries are repointed at.
+
+Because the test is made at runtime, **a privileged container keeps its sandbox** — the
+flag is not baked in. Note `Seccomp: 2` is what a stock `docker run` reports, so the
+unsandboxed path is the normal one outside a `--privileged` container.
+
+Firefox is unaffected: its sandbox uses neither setuid nor `unshare` in a way the default
+profile blocks.
+
+Dropping the sandbox is a real reduction in defence-in-depth for browser content. It buys
+a desktop that runs with no capabilities at all, which is the trade this whole document
+describes.
 
 ## Emulating this on plain Kubernetes
 
