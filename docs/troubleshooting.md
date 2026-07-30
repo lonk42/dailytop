@@ -326,6 +326,44 @@ stays in `/config` deliberately, so a browser exception survives a restart.
 
 ---
 
+## nginx cannot bind :80 as a non-root uid
+
+**Symptom:** no desktop, and
+
+```
+nginx: [emerg] bind() to 0.0.0.0:80 failed (13: Permission denied)
+```
+
+on a cluster that runs the container as an arbitrary uid — while the same image is fine
+under Docker and on k3s.
+
+**Cause:** two things compounding. Fedora's stock `nginx.conf` carries a default
+`server { listen 80; }` block that has nothing to do with the desktop (that is
+`conf.d/default.conf` on 3000/3001), and binding below 1024 needs
+`CAP_NET_BIND_SERVICE` unless `net.ipv4.ip_unprivileged_port_start` is 0. Docker and most
+containerd/kubelet setups set that sysctl to 0; **CRI-O leaves it at 1024**, so the
+runtime decides whether the image works.
+
+**Fix:** the `coder` stage removes the block — [the stock :80 server
+block](image-design.md#the-stock-80-server-block). Elsewhere, either delete the block
+from `/etc/nginx/nginx.conf` or set the sysctl in the pod:
+
+```yaml
+securityContext:
+  sysctls:
+    - name: net.ipv4.ip_unprivileged_port_start
+      value: "0"
+```
+
+Do not add `CAP_NET_BIND_SERVICE` to fix this: [k8s never sets ambient
+capabilities](unprivileged.md#no-capabilities-are-needed), so a non-root process does not
+get it anyway.
+
+**Reproduce it locally** on a runtime that would otherwise hide it:
+`docker run --sysctl net.ipv4.ip_unprivileged_port_start=1024 …`
+
+---
+
 ## "Waiting for stream" — the VAAPI fd leak
 
 Historical, on the Intel/VAAPI path: plain `x264enc` (VAAPI) **leaked

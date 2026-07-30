@@ -357,6 +357,24 @@ the deployment.
 The other stages keep `/config/ssl`: there the certificate is one a human accepts an
 exception for in a browser, and regenerating it on every restart re-prompts them.
 
+### The stock :80 server block
+
+Fedora's `nginx.conf` ships a default `server { listen 80; }` serving
+`/usr/share/nginx/html`. LinuxServer never touches it — the desktop is a separate
+`conf.d/default.conf` on 3000/3001 — so it is dead weight that nothing routes to, and it
+is removed here.
+
+It is not merely untidy. Binding a port below 1024 needs `CAP_NET_BIND_SERVICE` unless
+`net.ipv4.ip_unprivileged_port_start` is 0, and that sysctl is **not** uniform across
+container runtimes: Docker and most containerd/kubelet setups default it to 0, CRI-O does
+not. So the identical unprivileged image binds :80 happily on one cluster and dies with
+`bind() to 0.0.0.0:80 failed (13: Permission denied)` on another — and nginx exiting
+takes the desktop with it.
+
+Beware the ordering when reading logs: nginx parses its whole configuration before it
+binds anything, so a certificate it cannot load masks a port it cannot bind. Fixing the
+first is what reveals the second.
+
 ### Running unprivileged
 
 `UNPRIVILEGED=true` builds this stage to run as any non-root uid with no capabilities.

@@ -107,6 +107,7 @@ anyway.
 | `svc-selkies` honours `PULSE_RUNTIME_PATH` | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
 | Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
 | nginx self-signs into `/run/ssl`, not `/config/ssl` | Applied unconditionally. A key left in the workspace volume by another uid is unreadable to this one, and nginx exits rather than start without it; see [image-design.md](image-design.md#tls-material-lives-in-run) |
+| Fedora's stock `server { listen 80; }` removed from `nginx.conf` | Applied unconditionally. Nothing routes to it, and binding it needs `CAP_NET_BIND_SERVICE` on any runtime that leaves `net.ipv4.ip_unprivileged_port_start` at 1024 — CRI-O does; see [image-design.md](image-design.md#the-stock-80-server-block) |
 
 `UNPRIVILEGED_PATHS` is a build arg. **Extending it is the fix for any new "Permission
 denied" from an init script** — that is the intended maintenance path, not patching the
@@ -226,6 +227,13 @@ pod-security.kubernetes.io/enforce-version: latest
 
 `restricted` enforces `runAsNonRoot`, `allowPrivilegeEscalation: false`,
 `drop: ["ALL"]` and `seccompProfile: RuntimeDefault` — the same set that matters here.
+
+PSA also says nothing about `net.ipv4.ip_unprivileged_port_start`, which the *runtime*
+sets: Docker and most containerd/kubelet setups default it to 0, so an unprivileged
+process binds low ports anyway and any dependence on that goes unnoticed. CRI-O leaves it
+at 1024. To catch that class locally, pass `--sysctl net.ipv4.ip_unprivileged_port_start=1024`
+to `docker run`; on Kubernetes, set the same sysctl in the pod's
+`securityContext.sysctls` — it is in the safe set, so no allowlisting is needed.
 
 The one thing PSA does **not** emulate is SELinux. A cluster that assigns an MCS label
 per namespace and confines the container with `container_t` will behave differently; a Debian or k3s host running

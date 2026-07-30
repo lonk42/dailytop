@@ -623,6 +623,16 @@ RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
 	! grep -q /config/ssl "$NGINX_INIT" /defaults/default.conf && \
 	bash -n "$NGINX_INIT"
 
+# Fedora's stock nginx.conf keeps a default server on :80 that nothing here routes to --
+# the desktop is conf.d/default.conf on 3000/3001. A non-root uid cannot bind it where
+# ip_unprivileged_port_start is 1024. docs/image-design.md#the-stock-80-server-block
+RUN [ "$(grep -c '^    server {$' /etc/nginx/nginx.conf)" = "1" ] && \
+	grep -q 'listen       80;' /etc/nginx/nginx.conf && \
+	sed -i '/^    server {$/,/^    }$/d' /etc/nginx/nginx.conf && \
+	! grep -q 'listen       80' /etc/nginx/nginx.conf && \
+	grep -q 'include /etc/nginx/conf.d/\*.conf;' /etc/nginx/nginx.conf && \
+	nginx -t
+
 # Runs the whole session as a non-root uid with no capabilities, for clusters enforcing a
 # restricted pod security policy. Off by default: it makes PUID/PGID inert and relaxes group
 # permissions on paths the init scripts write. docs/unprivileged.md
