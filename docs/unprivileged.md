@@ -5,6 +5,10 @@ uid with **no capabilities at all**. This is what a restricted pod security poli
 requires, and it is off by default because it makes `PUID`/`PGID` inert and relaxes group
 permissions on paths the init scripts write.
 
+CI publishes this as its own variant, so you do not have to build it yourself:
+`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls286-<version>` (immutable —
+use this one). See [releases](../README.md#releases).
+
 FIPS is a separate and much harder problem — see [FIPS](#fips) at the bottom.
 
 ## What the deployment must supply

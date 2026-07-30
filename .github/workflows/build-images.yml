@@ -5,7 +5,12 @@
 # `dailytop:coder-ls286-0.0.1` (immutable). Git tags carry no `v` prefix.
 # Scheme and rationale: README.md#releases
 #
-# ADDING A TARGET: append it to RELEASE_TARGETS in the `prepare` job; the entitlement
+# A VARIANT is a stage plus the build args that define it, plus the tag name it
+# publishes under. Two variants can share a stage: `coder` and `coder-unpriv` are both
+# `--target coder`, differing only by `UNPRIVILEGED`. A variant's tag name is its own, so
+# adding one never moves the tag another variant's deployments follow.
+#
+# ADDING A VARIANT: append it to RELEASE_VARIANTS in the `prepare` job; the entitlement
 # and platforms are derived from the stage name.
 on:
   push:
@@ -24,6 +29,10 @@ on:
           - full
           - k8s
           - coder
+      unprivileged:
+        description: Build with UNPRIVILEGED=true (coder stage only)
+        type: boolean
+        default: false
       push:
         description: Push to GHCR (unchecked = build only)
         type: boolean
@@ -37,7 +46,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      targets: ${{ steps.plan.outputs.targets }}
+      variants: ${{ steps.plan.outputs.variants }}
       version: ${{ steps.plan.outputs.version }}
       suffix: ${{ steps.plan.outputs.suffix }}
       base: ${{ steps.plan.outputs.base }}
@@ -50,13 +59,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ADD TARGETS HERE. `full` and `k8s` are heavy -- see the disk note below.
-          RELEASE_TARGETS='["coder"]'
+          # ADD VARIANTS HERE. `full` and `k8s` are heavy -- see the disk note below.
+          RELEASE_VARIANTS='[
+            {"name": "coder",        "target": "coder", "args": ""},
+            {"name": "coder-unpriv", "target": "coder", "args": "UNPRIVILEGED=true"}
+          ]'
 
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            targets='["${{ inputs.target }}"]'
+            t='${{ inputs.target }}'
+            if [ '${{ inputs.unprivileged }}' = true ]; then
+              # Asserted rather than silently ignored: UNPRIVILEGED exists only on coder,
+              # and BuildKit treats an unused build arg as a warning, not an error.
+              if [ "$t" != coder ]; then
+                echo "::error::unprivileged is a coder-stage option; got target '$t'"
+                exit 1
+              fi
+              variants=$(jq -cn --arg t "$t" \
+                '[{name: ($t + "-unpriv"), target: $t, args: "UNPRIVILEGED=true"}]')
+            else
+              variants=$(jq -cn --arg t "$t" '[{name: $t, target: $t, args: ""}]')
+            fi
           else
-            targets="$RELEASE_TARGETS"
+            variants=$(printf '%s' "$RELEASE_VARIANTS" | jq -c .)
           fi
 
           # The git tag verbatim; a manual run is stamped with the short SHA instead.
@@ -90,7 +114,7 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
 
           {
-            echo "targets=$targets"
+            echo "variants=$variants"
             echo "version=$version"
             echo "base=$base"
             echo "suffix=$suffix"
@@ -102,7 +126,7 @@ jobs:
           {
             echo "| | |"
             echo "|---|---|"
-            echo "| targets | \`${{ steps.plan.outputs.targets }}\` |"
+            echo "| variants | \`${{ steps.plan.outputs.variants }}\` |"
             echo "| version | \`${{ steps.plan.outputs.version }}\` |"
             echo "| base | \`${{ steps.plan.outputs.base }}\` |"
             echo "| image | \`${{ steps.plan.outputs.image }}\` |"
@@ -114,7 +138,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
+        variant: ${{ fromJSON(needs.prepare.outputs.variants) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,7 +155,7 @@ jobs:
         id: opts
         run: |
           set -euo pipefail
-          case "${{ matrix.target }}" in
+          case "${{ matrix.variant.target }}" in
             desktop|full|k8s)
               echo "buildkitd_flags=--allow-insecure-entitlement security.insecure" >> "$GITHUB_OUTPUT"
               echo "allow=security.insecure" >> "$GITHUB_OUTPUT"
@@ -149,17 +173,17 @@ jobs:
         run: |
           set -euo pipefail
           image='${{ needs.prepare.outputs.image }}'
-          target='${{ matrix.target }}'
+          name='${{ matrix.variant.name }}'
           version='${{ needs.prepare.outputs.version }}'
           suffix='${{ needs.prepare.outputs.suffix }}'
 
           # A manual run must not move the tag deployments follow.
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             tags=$(printf '%s\n' \
-              "${image}:${target}" \
-              "${image}:${target}-${suffix}-${version}")
+              "${image}:${name}" \
+              "${image}:${name}-${suffix}-${version}")
           else
-            tags="${image}:${target}-${suffix}-${version}"
+            tags="${image}:${name}-${suffix}-${version}"
           fi
 
           {
@@ -182,7 +206,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          target: ${{ matrix.target }}
+          target: ${{ matrix.variant.target }}
+          build-args: ${{ matrix.variant.args }}
           platforms: ${{ steps.opts.outputs.platforms }}
           allow: ${{ steps.opts.outputs.allow }}
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
@@ -194,7 +219,8 @@ jobs:
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
-            org.dailytop.target=${{ matrix.target }}
+            org.dailytop.target=${{ matrix.variant.target }}
+            org.dailytop.variant=${{ matrix.variant.name }}
             org.dailytop.base-image=${{ needs.prepare.outputs.base }}
           # No build cache: tag builds are infrequent and a mode=max cache for images
           # this size costs more registry storage than it saves. If that changes, add
@@ -204,7 +230,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### ${{ matrix.target }}"
+            echo "### ${{ matrix.variant.name }}"
             echo '```'
             echo "${{ steps.tags.outputs.value }}"
             echo '```'
