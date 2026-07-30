@@ -1,0 +1,16 @@
+# Runtime secrets (USER_PASSWORD etc.) -- never commit
+.env
+
+# Extra CA certificates are environment-specific; the directory and its README are
+# tracked, the certs are not. See certs/README.md.
+certs/*.crt
+certs/*.pem
+
+# The desktop's /config home when bind-mounted here (large; caches, tokens, history)
+config/
+
+# Editor cruft
+*.swp
+*.swo
+*~
+.DS_Store

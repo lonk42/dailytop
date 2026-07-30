@@ -1,0 +1,211 @@
+---
+# Build dailytop image variants and push them to GHCR.
+#
+# Tags per build, both at the same digest: `dailytop:coder` (moving) and
+# `dailytop:coder-ls286-0.0.1` (immutable). Git tags carry no `v` prefix.
+# Scheme and rationale: README.md#releases
+#
+# ADDING A TARGET: append it to RELEASE_TARGETS in the `prepare` job; the entitlement
+# and platforms are derived from the stage name.
+on:
+  push:
+    tags:
+      # `*` does not match `/`, and a slash is not legal in a Docker tag anyway.
+      - '*'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Stage to build
+        type: choice
+        default: coder
+        options:
+          - base
+          - desktop
+          - full
+          - k8s
+          - coder
+      push:
+        description: Push to GHCR (unchecked = build only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      version: ${{ steps.plan.outputs.version }}
+      suffix: ${{ steps.plan.outputs.suffix }}
+      base: ${{ steps.plan.outputs.base }}
+      image: ${{ steps.plan.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan the build
+        id: plan
+        run: |
+          set -euo pipefail
+
+          # ADD TARGETS HERE. `full` and `k8s` are heavy -- see the disk note below.
+          RELEASE_TARGETS='["coder"]'
+
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            targets='["${{ inputs.target }}"]'
+          else
+            targets="$RELEASE_TARGETS"
+          fi
+
+          # The git tag verbatim; a manual run is stamped with the short SHA instead.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="0.0.0-${GITHUB_SHA::7}"
+          fi
+
+          # Git tags allow characters Docker tags do not. Catch it before a multi-GB build.
+          if ! printf '%s' "$version" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9._-]*$'; then
+            echo "::error::git tag '$version' is not usable in a Docker tag"
+            exit 1
+          fi
+
+          base=$(sed -n 's/^ARG WEBTOP_BASE_IMAGE=//p' Dockerfile | head -1)
+          if [ -z "$base" ]; then
+            echo "::error::could not read ARG WEBTOP_BASE_IMAGE from Dockerfile"
+            exit 1
+          fi
+
+          # fedora-kde-37cda392-ls286 -> ls286. Asserted, not assumed: a base pinned
+          # without one would otherwise silently produce a nonsense image tag.
+          suffix=$(printf '%s' "${base##*:}" | grep -oE 'ls[0-9]+$' || true)
+          if [ -z "$suffix" ]; then
+            echo "::error::base tag '${base##*:}' has no trailing lsNNN component"
+            exit 1
+          fi
+
+          # GHCR rejects uppercase in image names; owners can contain it.
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+
+          {
+            echo "targets=$targets"
+            echo "version=$version"
+            echo "base=$base"
+            echo "suffix=$suffix"
+            echo "image=ghcr.io/${owner}/dailytop"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| targets | \`${{ steps.plan.outputs.targets }}\` |"
+            echo "| version | \`${{ steps.plan.outputs.version }}\` |"
+            echo "| base | \`${{ steps.plan.outputs.base }}\` |"
+            echo "| image | \`${{ steps.plan.outputs.image }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # A stock runner has ~14 GB free, which a `full` build will exceed. Dropping the
+      # preinstalled toolchains buys back ~25 GB.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-}"
+          df -h /
+
+      # Only the flatpak stages need the security.insecure entitlement.
+      - name: Resolve stage build options
+        id: opts
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            desktop|full|k8s)
+              echo "buildkitd_flags=--allow-insecure-entitlement security.insecure" >> "$GITHUB_OUTPUT"
+              echo "allow=security.insecure" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "buildkitd_flags=" >> "$GITHUB_OUTPUT"
+              echo "allow=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          # The base publishes arm64 too; building both roughly doubles runtime.
+          echo "platforms=linux/amd64" >> "$GITHUB_OUTPUT"
+
+      - name: Compose tags
+        id: tags
+        run: |
+          set -euo pipefail
+          image='${{ needs.prepare.outputs.image }}'
+          target='${{ matrix.target }}'
+          version='${{ needs.prepare.outputs.version }}'
+          suffix='${{ needs.prepare.outputs.suffix }}'
+
+          # A manual run must not move the tag deployments follow.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tags=$(printf '%s\n' \
+              "${image}:${target}" \
+              "${image}:${target}-${suffix}-${version}")
+          else
+            tags="${image}:${target}-${suffix}-${version}"
+          fi
+
+          {
+            echo 'value<<TAGS'
+            echo "$tags"
+            echo 'TAGS'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: ${{ steps.opts.outputs.buildkitd_flags }}
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: ${{ steps.opts.outputs.platforms }}
+          allow: ${{ steps.opts.outputs.allow }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          tags: ${{ steps.tags.outputs.value }}
+          # Keeps a single-platform push a plain manifest rather than an index.
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            org.dailytop.target=${{ matrix.target }}
+            org.dailytop.base-image=${{ needs.prepare.outputs.base }}
+          # No build cache: tag builds are infrequent and a mode=max cache for images
+          # this size costs more registry storage than it saves. If that changes, add
+          # cache-from/cache-to of type=registry.
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.target }}"
+            echo '```'
+            echo "${{ steps.tags.outputs.value }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

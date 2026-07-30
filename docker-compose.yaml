@@ -1,0 +1,68 @@
+---
+# The `full` dailytop variant on a single Docker host.
+#
+#   cp .env.example .env && $EDITOR .env
+#   ./build.sh full
+#   docker compose up -d          # then open https://localhost:3001/
+#
+# Software rendered by default. For NVIDIA, uncomment the two NVIDIA blocks below and
+# set SELKIES_ENCODER=x264enc,x264enc-striped,jpeg in .env.
+services:
+  dailytop:
+    image: ${IMAGE:-dailytop:full}
+    container_name: dailytop
+
+    # NVIDIA 1/2 -- needs nvidia-container-toolkit registered as a Docker runtime.
+    # Exposing device nodes is NOT enough; only the runtime injects the userspace
+    # driver. docs/troubleshooting.md#nvidia-exposing-devices-is-not-injecting-the-driver
+    # runtime: nvidia
+
+    # REQUIRED. Chromium/Electron apps crash on Docker's 64 MB default.
+    shm_size: "2gb"
+
+    # Unmasks /proc for flatpak's bwrap sandbox. SYS_ADMIN does not help; `privileged`
+    # works but grants far more.
+    # docs/troubleshooting.md#what-privileged-actually-buys-unmasked-proc
+    security_opt:
+      - seccomp:unconfined
+      - systempaths=unconfined
+
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - TITLE=${TITLE:-dailytop}
+      - KEYBOARD=${KEYBOARD:-en-us-qwerty}
+      - SUBFOLDER=/
+      # Native Wayland capture. docs/troubleshooting.md#the-encoder-model-read-this-first
+      - PIXELFLUX_WAYLAND=true
+      # Ordered fallback list. `x264enc` is the HARDWARE path -- CPU-only default here.
+      - SELKIES_ENCODER=${SELKIES_ENCODER:-x264enc-striped,jpeg}
+      - USER_PASSWORD=${USER_PASSWORD:?set USER_PASSWORD in .env (see .env.example)}
+      # - LOCK_ON_STARTUP=false
+      # Registry host[:port] using a private CA. See certs/README.md.
+      # - PRIVATE_REGISTRY=registry.example.com
+
+      # NVIDIA 2/2 -- uncomment together with `runtime: nvidia` above.
+      # NVIDIA_VISIBLE_DEVICES must be non-empty or nothing is injected.
+      # - NVIDIA_VISIBLE_DEVICES=all
+      # - NVIDIA_DRIVER_CAPABILITIES=all
+      # - DRINODE=/dev/dri/renderD128
+      # pixelflux picks its encoder backend from DRI_NODE's driver; zero-copy when it
+      # equals DRINODE.
+      # - DRI_NODE=/dev/dri/renderD128
+
+    volumes:
+      - dailytop-config:/config
+      # Extra root CAs; an empty mount is fine. See certs/README.md.
+      - ./certs:/certs:ro
+
+    ports:
+      - "3000:3000"   # HTTP  (the client refuses to start on a non-secure context)
+      - "3001:3001"   # HTTPS -- use this one
+      - "2222:2222"   # sshd (key auth only; put your key in /config/.ssh/authorized_keys)
+
+    restart: unless-stopped
+
+volumes:
+  dailytop-config:
