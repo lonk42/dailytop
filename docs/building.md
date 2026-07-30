@@ -85,3 +85,5 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | Arg | Default | Notes |
 |---|---|---|
 | `CODER_PACKAGES` | *(empty)* | The rest of the variant is deliberately fixed |
+| `UNPRIVILEGED` | `false` | Runs as a non-root uid with no capabilities, for clusters that forbid root containers. Makes `PUID`/`PGID` inert — [what it changes and what the deployment must supply](unprivileged.md) |
+| `UNPRIVILEGED_PATHS` | *(the paths the init scripts write — see the Dockerfile)* | Made group-root and group-writable. Extending this list is the fix for a new "Permission denied" from an init script |

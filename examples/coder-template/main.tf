@@ -54,6 +54,12 @@ locals {
   # healthy. Leave empty for a publicly trusted cert. See certs/README.md.
   ca_cert_secret = ""
 
+  # Set true ONLY for an image built with `--build-arg UNPRIVILEGED=true`. Runs the
+  # session as a non-root uid with no capabilities, as a restricted pod security policy
+  # requires. The /run emptyDir below is not optional -- without it s6-overlay's preinit
+  # exits before any service starts. docs/unprivileged.md
+  unprivileged = false
+
   name = lower("dailytop-${data.coder_workspace_owner.me.name}-${data.coder_workspace.me.name}")
   labels = {
     "app.kubernetes.io/name"     = "dailytop"
@@ -206,6 +212,20 @@ resource "kubernetes_pod" "main" {
     # No node_selector and no runtime_class_name: this variant wants no GPU, so it must
     # NOT request the nvidia runtime.
 
+    # gid 0 is what makes the image's group-writable paths reachable from an arbitrary
+    # uid. Where the cluster assigns the uid itself, leave run_as_user unset.
+    dynamic "security_context" {
+      for_each = local.unprivileged ? [1] : []
+      content {
+        run_as_non_root = true
+        run_as_group    = "0"
+        fs_group        = "1000"
+        seccomp_profile {
+          type = "RuntimeDefault"
+        }
+      }
+    }
+
     container {
       name  = "dailytop"
       image = local.image
@@ -216,6 +236,34 @@ resource "kubernetes_pod" "main" {
       image_pull_policy = "IfNotPresent"
 
       # NO command/args -- see note 1 in the header. s6-overlay is the entrypoint.
+
+      # Nothing is ADDED: the image's s6-setuidgid shim removes the need for
+      # SETUID/SETGID, which k8s could not make effective anyway. docs/unprivileged.md
+      dynamic "security_context" {
+        for_each = local.unprivileged ? [1] : []
+        content {
+          allow_privilege_escalation = false
+          capabilities {
+            drop = ["ALL"]
+          }
+        }
+      }
+
+      # LSIO_NON_ROOT_USER skips init-adduser's usermod/groupmod; NO_GAMEPAD skips the
+      # /dev/input mknod, which needs CAP_MKNOD. PULSE_RUNTIME_PATH is LOAD-BEARING: the
+      # base bakes /defaults, which pulseaudio cannot chown unprivileged, and the desktop
+      # then never starts while every service reports up. docs/unprivileged.md#pulseaudio
+      dynamic "env" {
+        for_each = local.unprivileged ? {
+          LSIO_NON_ROOT_USER = "true"
+          NO_GAMEPAD         = "1"
+          PULSE_RUNTIME_PATH = "/run/pulse"
+        } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
 
       env {
         name  = "CODER_AGENT_TOKEN"
@@ -321,6 +369,17 @@ resource "kubernetes_pod" "main" {
           read_only  = true
         }
       }
+
+      # s6-overlay's preinit refuses a root-owned /run it cannot chown. An emptyDir
+      # arrives mode 2777, which the image's baked S6_YES_I_WANT_A_WORLD_WRITABLE_RUN_*
+      # accepts. Fatal without it, before any service logs anything.
+      dynamic "volume_mount" {
+        for_each = local.unprivileged ? [1] : []
+        content {
+          name       = "run"
+          mount_path = "/run"
+        }
+      }
     }
 
     volume {
@@ -336,6 +395,14 @@ resource "kubernetes_pod" "main" {
       empty_dir {
         medium     = "Memory"
         size_limit = "2Gi"
+      }
+    }
+
+    dynamic "volume" {
+      for_each = local.unprivileged ? [1] : []
+      content {
+        name = "run"
+        empty_dir {}
       }
     }
 

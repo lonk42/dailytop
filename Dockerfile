@@ -553,3 +553,78 @@ RUN chmod 0755 /custom-cont-init.d/04-no-gpu.sh && \
 ENV SELKIES_AUTO_GPU=false
 ENV AUTO_GPU=false
 ENV LIBGL_ALWAYS_SOFTWARE=1
+
+# svc-selkies busy-waits on pulseaudio's pidfile at a path hardcoded to match the base's
+# baked PULSE_RUNTIME_PATH=/defaults. Honour the variable so a deployment can move the
+# runtime dir; unchanged when it is unset. docs/unprivileged.md#pulseaudio
+RUN grep -q 'until \[ -f /defaults/pid \]; do' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	sed -i 's|until \[ -f /defaults/pid \]; do|until [ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" ]; do|' \
+		/etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	grep -q 'until \[ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" \]; do' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	bash -n /etc/s6-overlay/s6-rc.d/svc-selkies/run
+
+# Runs the whole session as a non-root uid with no capabilities, for clusters enforcing a
+# restricted pod security policy. Off by default: it makes PUID/PGID inert and relaxes group
+# permissions on paths the init scripts write. docs/unprivileged.md
+ARG UNPRIVILEGED=false
+
+# Paths the s6 init scripts write to at runtime. Made group-writable and group-root, so
+# ANY uid works provided the pod runs with gid 0, the usual convention. Extending
+# this list is how you fix a new "Permission denied" from an init script.
+ARG UNPRIVILEGED_PATHS="/etc/nginx /usr/share/selkies /etc/glvnd/egl_vendor.d \
+/etc/vulkan/icd.d /etc/pki/ca-trust/source/anchors /etc/pki/ca-trust/extracted \
+/var/lib/nginx /var/log/nginx /defaults /app /etc/passwd /etc/group"
+
+# s6-applyuidgid calls setgroups() unconditionally, which needs CAP_SETGID. A non-root
+# container never has it EFFECTIVE -- k8s puts capabilities.add in the bounding set only
+# and never sets ambient caps -- so every `s6-setuidgid abc` call site exits 111 and s6
+# restart-loops that service forever. docs/unprivileged.md#no-capabilities-are-needed
+RUN cat > /usr/local/bin/s6-setuidgid-unpriv <<'EOF'
+#!/bin/bash
+# Already the target user, so dropping privileges is a no-op: drop the username and exec.
+if [ "$(id -u)" != "0" ]; then
+  shift
+  exec "$@"
+fi
+exec /package/admin/s6/command/s6-setuidgid "$@"
+EOF
+
+# An arbitrary uid has no passwd entry, and getpwuid() failures are obscure when they
+# surface (plasmashell, dbus, ssh). Needs /etc/passwd group-writable, hence the path list.
+RUN cat > /custom-cont-init.d/05-unpriv-passwd.sh <<'EOF'
+#!/bin/bash
+uid=$(id -u)
+if getent passwd "${uid}" >/dev/null 2>&1; then
+  exit 0
+fi
+if printf 'abc-unpriv:x:%s:%s:container user:/config:/bin/bash\n' "${uid}" "$(id -g)" >> /etc/passwd 2>/dev/null; then
+  echo "[custom-init] added /etc/passwd entry for uid ${uid}"
+else
+  echo "[custom-init] WARNING: uid ${uid} has no passwd entry and /etc/passwd is not writable" >&2
+fi
+exit 0
+EOF
+
+# lsiown and /docker-mods ship 0744, so a non-root container cannot execute them and
+# init-adduser exits 126 -- which halts every service that depends on it.
+RUN if [ "${UNPRIVILEGED}" = "true" ]; then \
+		chmod 0755 /usr/local/bin/s6-setuidgid-unpriv && \
+		bash -n /usr/local/bin/s6-setuidgid-unpriv && \
+		[ "$(readlink /command/s6-setuidgid)" = "../package/admin/s6/command/s6-setuidgid" ] && \
+		ln -sf /usr/local/bin/s6-setuidgid-unpriv /command/s6-setuidgid && \
+		chmod 0755 /usr/sbin/lsiown /docker-mods && \
+		find /etc/s6-overlay/s6-rc.d -name run -type f ! -perm -o+x -exec chmod 0755 {} + && \
+		! find /etc/s6-overlay/s6-rc.d -name run -type f ! -perm -o+x | grep -q . && \
+		chmod 0755 /custom-cont-init.d/05-unpriv-passwd.sh && \
+		bash -n /custom-cont-init.d/05-unpriv-passwd.sh && \
+		chgrp -R 0 ${UNPRIVILEGED_PATHS} && \
+		chmod -R g=u ${UNPRIVILEGED_PATHS} && \
+		[ "$(stat -c '%A %G' /usr/sbin/lsiown)" = "-rwxr-xr-x root" ] && \
+		[ "$(stat -c '%A %G' /etc/passwd)" = "-rw-rw-r-- root" ]; \
+	else \
+		rm -f /usr/local/bin/s6-setuidgid-unpriv /custom-cont-init.d/05-unpriv-passwd.sh; \
+	fi
+
+# Inert when running as root: preinit only consults it on the branch where it cannot
+# chown /run itself, which is fatal otherwise. A k8s emptyDir on /run is mode 2777.
+ENV S6_YES_I_WANT_A_WORLD_WRITABLE_RUN_BECAUSE_KUBERNETES=1
