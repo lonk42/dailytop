@@ -364,6 +364,78 @@ get it anyway.
 
 ---
 
+## Firefox: cannot open display :0
+
+**Symptom:** Firefox refuses to start with `Error: cannot open display: :0` while Chromium
+and the rest of the desktop are fine. Seen only when running as a non-root uid.
+
+**Cause:** three things lining up.
+
+1. The base's `startwm_wayland.sh` creates Xwayland's socket directory with
+   `sudo mkdir -p /tmp/.X11-unix`.
+2. `sudo` cannot elevate in an unprivileged container — it is setuid, and
+   `allowPrivilegeEscalation: false` sets `NoNewPrivs`. So the command fails and the
+   directory is never created. (The session user could have created it unaided; `/tmp` is
+   `1777`. The `sudo` is what breaks it.)
+3. Xwayland has nowhere to bind its socket, so **there is no X display at all** — while
+   the same script exports `DISPLAY=:0` and `MOZ_ENABLE_WAYLAND=0`, pinning Firefox to
+   X11.
+
+Chromium hides the problem because it uses the Wayland ozone backend and never touches
+X. Any X11-only application fails the same way Firefox does.
+
+**Check:**
+
+```bash
+ls -ld /tmp/.X11-unix      # missing = this bug
+pgrep -a Xwayland          # nothing = confirmed
+```
+
+**Fix:** the `coder` stage drops the two `sudo` prefixes, so the session creates the
+directory itself. Without a rebuild, `mkdir -p /tmp/.X11-unix && chmod 1777
+/tmp/.X11-unix` in the pod followed by a restart of the desktop is the same thing, or
+launch Firefox with `MOZ_ENABLE_WAYLAND=1` to bypass X entirely.
+
+Leaving `MOZ_ENABLE_WAYLAND=0` alone is deliberate: X11 is the path the NVIDIA
+[EGL-on-X11 VAAPI wiring](image-design.md#firefox-egl-on-x11-then-vaapi) depends on, and
+that should not differ between stages for a reason this narrow.
+
+---
+
+## Dashboard loads, then flashes every few seconds
+
+**Symptom:** the selkies web UI appears but reloads on a short cycle, and the nginx error
+log repeats
+
+```
+connect() failed (111: Connection refused) while connecting to upstream,
+upstream: "http://127.0.0.1:8082/websockets…"
+```
+
+**Cause:** nginx is fine — it serves the dashboard as static files and only needs selkies
+for the websocket. Port 8082 is selkies' data websocket, so a refusal means **the selkies
+python process is not running**. Confirm before going further:
+
+```bash
+pgrep -af selkies            # nothing = selkies never started
+pgrep -a pulseaudio          # see below
+```
+
+Two ways selkies fails to be there, and they look identical from the browser:
+
+1. **It never started.** `svc-selkies` waits for pulseaudio's pidfile before it execs
+   selkies, and in the stock base that wait is unbounded and pulseaudio's output is
+   discarded — so a pulseaudio that refuses to start silently costs you the desktop. See
+   [when pulseaudio does not start](unprivileged.md#when-pulseaudio-does-not-start). The
+   usual trigger is an unset `PULSE_RUNTIME_PATH` on a non-root deployment.
+2. **It is crash-looping.** selkies logs to the container log, so look for a Python
+   traceback repeating on the same interval as the flashing.
+
+Do not restart selkies to test a fix — [it is the parent of the whole Wayland
+session](#never-restart-selkies-to-fix-the-desktop).
+
+---
+
 ## "Waiting for stream" — the VAAPI fd leak
 
 Historical, on the Intel/VAAPI path: plain `x264enc` (VAAPI) **leaked

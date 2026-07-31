@@ -587,14 +587,36 @@ RUN chmod 0755 /usr/local/bin/code && \
 		! grep -q '^Exec=/usr/share/code/code' "$f" || exit 1; \
 	done
 
-# svc-selkies busy-waits on pulseaudio's pidfile at a path hardcoded to match the base's
-# baked PULSE_RUNTIME_PATH=/defaults. Honour the variable so a deployment can move the
-# runtime dir; unchanged when it is unset. docs/unprivileged.md#pulseaudio
+# svc-selkies waits forever on pulseaudio's pidfile, at a path hardcoded to match the
+# base's baked PULSE_RUNTIME_PATH=/defaults. Honour the variable, and bound the wait --
+# an unreachable pidfile costs the desktop, not just audio. docs/unprivileged.md#pulseaudio
 RUN grep -q 'until \[ -f /defaults/pid \]; do' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
-	sed -i 's|until \[ -f /defaults/pid \]; do|until [ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" ]; do|' \
+	sed -i 's|until \[ -f /defaults/pid \]; do|for i in $(seq 1 120); do [ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" ] \&\& break; [ "$i" = 120 ] \&\& echo "[svc-selkies] no pulseaudio pidfile after 60s; continuing without audio setup" >\&2|' \
 		/etc/s6-overlay/s6-rc.d/svc-selkies/run && \
-	grep -q 'until \[ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" \]; do' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	grep -q 'PULSE_RUNTIME_PATH:-/defaults' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	grep -q 'no pulseaudio pidfile after 60s' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
 	bash -n /etc/s6-overlay/s6-rc.d/svc-selkies/run
+
+# startwm creates Xwayland's socket directory with sudo, which a non-root container cannot
+# use -- so Xwayland gets no socket, and the session's MOZ_ENABLE_WAYLAND=0 sends Firefox
+# to an X display that never came up. /tmp is 1777. docs/troubleshooting.md#firefox-cannot-open-display-0
+RUN grep -q '^sudo mkdir -p /tmp/.X11-unix$' /defaults/startwm_wayland.sh && \
+	grep -q '^sudo chmod 1777 /tmp/.X11-unix$' /defaults/startwm_wayland.sh && \
+	sed -i \
+		-e 's|^sudo mkdir -p /tmp/.X11-unix$|mkdir -p /tmp/.X11-unix|' \
+		-e 's|^sudo chmod 1777 /tmp/.X11-unix$|chmod 1777 /tmp/.X11-unix 2>/dev/null \|\| true|' \
+		/defaults/startwm_wayland.sh && \
+	! grep -q 'sudo.*X11-unix' /defaults/startwm_wayland.sh && \
+	bash -n /defaults/startwm_wayland.sh
+
+# The base discards pulseaudio's output, so a pulseaudio that will not start is invisible
+# -- and svc-selkies blocks on its pidfile. --log-level=0 keeps this to errors only.
+# docs/unprivileged.md#pulseaudio
+RUN grep -q -- '--exit-idle-time=-1 > /dev/null 2>&1' /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
+	sed -i 's|--exit-idle-time=-1 > /dev/null 2>&1|--exit-idle-time=-1|' \
+		/etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
+	! grep -q '/dev/null' /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
+	bash -n /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run
 
 # Coder authenticates every request at its proxy, so the base's HTTP basic auth is a
 # second login for nothing, and the sed that enables it uncomments blindly. PASSWORD and

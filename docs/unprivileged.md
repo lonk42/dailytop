@@ -107,6 +107,7 @@ anyway.
 | `svc-selkies` honours `PULSE_RUNTIME_PATH` | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
 | Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
 | nginx self-signs into `/run/ssl`, not `/config/ssl` | Applied unconditionally. A key left in the workspace volume by another uid is unreadable to this one, and nginx exits rather than start without it; see [image-design.md](image-design.md#tls-material-lives-in-run) |
+| `sudo` dropped from startwm's `/tmp/.X11-unix` setup | Applied unconditionally. `sudo` cannot elevate here, so Xwayland never gets a socket and every X11 app — Firefox first — fails with `cannot open display`; see [troubleshooting](troubleshooting.md#firefox-cannot-open-display-0) |
 | `user nginx;` dropped and the pid file moved to `/var/lib/nginx` | Neither works or matters without a root master; see [nginx as a non-root master](#nginx-as-a-non-root-master) |
 | Fedora's stock `server { listen 80; }` removed from `nginx.conf` | Applied unconditionally. Nothing routes to it, and binding it needs `CAP_NET_BIND_SERVICE` on any runtime that leaves `net.ipv4.ip_unprivileged_port_start` at 1024 — CRI-O does; see [image-design.md](image-design.md#the-stock-80-server-block) |
 
@@ -162,6 +163,25 @@ Diagnosing this from the outside is unpleasant, so the tell is: `svc-selkies` sh
 `up` but its process is still `bash ./run svc-selkies` with no children, and
 `svc-pulseaudio` is `down (exitcode 1)` and restarting.
 
+### When pulseaudio does not start
+
+The handshake above is a hard dependency in the base: `svc-selkies` waits for the pidfile
+in an unbounded loop *before* it execs selkies, so a pulseaudio that never starts costs
+you the entire desktop, not the audio. The failure has no signature — the base sends
+pulseaudio's stdout and stderr to `/dev/null`, so nothing is logged, nginx comes up and
+serves the dashboard, and the only symptom is the client reconnecting every few seconds
+against `127.0.0.1:8082` with `connection refused` in the nginx error log, because selkies
+never got as far as opening it.
+
+This stage changes both halves: pulseaudio keeps its stderr (`--log-level=0`, so errors
+only), and the wait is bounded at 60 seconds, after which `svc-selkies` logs and starts
+selkies anyway. A desktop without audio beats no desktop.
+
+The usual cause is `PULSE_RUNTIME_PATH` being left unset, which sends pulseaudio to the
+baked `/defaults`. That directory belongs to root, and pulseaudio refuses a runtime
+directory it does not own — which is why the deployment must set `/run/pulse`, a path
+pulseaudio creates itself with the ownership it wants.
+
 ## Known limitations
 
 Three things do not work unprivileged, and all three are visible as noise in the boot log
@@ -172,7 +192,10 @@ rather than as failures:
   also fails (`sed: couldn't open temporary file /etc/sedXXXXXX`), which leaves `NOPASSWD`
   in place — harmless precisely because `sudo` cannot work either way.
   `/etc/sudoers` is deliberately **not** in `UNPRIVILEGED_PATHS`; a group-writable
-  sudoers is a worse idea than a cosmetic error.
+  sudoers is a worse idea than a cosmetic error. Where an *upstream* script reaches for
+  `sudo` to do something the session user could do unaided, that is a bug here and the fix
+  is to drop the `sudo` — see [Firefox: cannot open display
+  :0](troubleshooting.md#firefox-cannot-open-display-0), which is exactly that.
 - **Gamepad emulation is unavailable.** `init-selkies-config` does
   `mkdir -pm1777 /dev/input` and `mknod .../js0`, which need `CAP_MKNOD`. Set
   `NO_GAMEPAD=1` in the deployment to skip the attempt and quieten the log.
