@@ -554,6 +554,13 @@ BuildKit then falls back to the *native snapshotter*, which full-copies the mult
 base rootfs on every layer and ENOSPCs regardless of free disk. A host with `overlay2`
 builds it with CoW diffs.
 
+**A validation command in a `RUN` can leave state in the layer.** `nginx -t` is the one
+that bit here: a config *test* creates `/run/nginx.pid` and empty nginx logs, root-owned,
+which then ship in the image and break an unprivileged container that has no `emptyDir`
+masking `/run`. Anything run as a build-time check needs its side effects deleted in the
+same instruction — see [nginx as a non-root
+master](unprivileged.md#nginx-as-a-non-root-master).
+
 **Flatpak steps need an entitlement.** `desktop`, `full` and `k8s` install flatpaks,
 whose deploy step uses bwrap, so they need
 `docker buildx build --allow security.insecure` against a builder created with

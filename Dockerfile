@@ -625,13 +625,16 @@ RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
 
 # Fedora's stock nginx.conf keeps a default server on :80 that nothing here routes to --
 # the desktop is conf.d/default.conf on 3000/3001. A non-root uid cannot bind it where
-# ip_unprivileged_port_start is 1024. docs/image-design.md#the-stock-80-server-block
+# ip_unprivileged_port_start is 1024. `nginx -t` leaves a root-owned pid file and empty
+# logs behind, which must not reach a layer. docs/image-design.md#the-stock-80-server-block
 RUN [ "$(grep -c '^    server {$' /etc/nginx/nginx.conf)" = "1" ] && \
 	grep -q 'listen       80;' /etc/nginx/nginx.conf && \
 	sed -i '/^    server {$/,/^    }$/d' /etc/nginx/nginx.conf && \
 	! grep -q 'listen       80' /etc/nginx/nginx.conf && \
 	grep -q 'include /etc/nginx/conf.d/\*.conf;' /etc/nginx/nginx.conf && \
-	nginx -t
+	nginx -t && \
+	rm -f /run/nginx.pid /var/log/nginx/access.log /var/log/nginx/error.log && \
+	[ ! -e /run/nginx.pid ] && [ -z "$(ls -A /var/log/nginx)" ]
 
 # Runs the whole session as a non-root uid with no capabilities, for clusters enforcing a
 # restricted pod security policy. Off by default: it makes PUID/PGID inert and relaxes group
@@ -644,6 +647,20 @@ ARG UNPRIVILEGED=false
 ARG UNPRIVILEGED_PATHS="/etc/nginx /usr/share/selkies /etc/glvnd/egl_vendor.d \
 /etc/vulkan/icd.d /etc/pki/ca-trust/source/anchors /etc/pki/ca-trust/extracted \
 /var/lib/nginx /var/log/nginx /defaults /app /etc/passwd /etc/group"
+
+# A non-root master cannot setuid, so `user` is a warning per start, and the pid file
+# moves out of /run -- the one path here whose permissions the deployment owns, not the
+# image. docs/unprivileged.md#nginx-as-a-non-root-master
+RUN if [ "${UNPRIVILEGED}" = "true" ]; then \
+		grep -q '^user nginx;$' /etc/nginx/nginx.conf && \
+		grep -q '^pid /run/nginx.pid;$' /etc/nginx/nginx.conf && \
+		sed -i \
+			-e '/^user nginx;$/d' \
+			-e 's|^pid /run/nginx.pid;$|pid /var/lib/nginx/nginx.pid;|' \
+			/etc/nginx/nginx.conf && \
+		! grep -q '^user nginx;' /etc/nginx/nginx.conf && \
+		grep -q '^pid /var/lib/nginx/nginx.pid;$' /etc/nginx/nginx.conf; \
+	fi
 
 # s6-applyuidgid calls setgroups() unconditionally, which needs CAP_SETGID. A non-root
 # container never has it EFFECTIVE -- k8s puts capabilities.add in the bounding set only

@@ -107,6 +107,7 @@ anyway.
 | `svc-selkies` honours `PULSE_RUNTIME_PATH` | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
 | Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
 | nginx self-signs into `/run/ssl`, not `/config/ssl` | Applied unconditionally. A key left in the workspace volume by another uid is unreadable to this one, and nginx exits rather than start without it; see [image-design.md](image-design.md#tls-material-lives-in-run) |
+| `user nginx;` dropped and the pid file moved to `/var/lib/nginx` | Neither works or matters without a root master; see [nginx as a non-root master](#nginx-as-a-non-root-master) |
 | Fedora's stock `server { listen 80; }` removed from `nginx.conf` | Applied unconditionally. Nothing routes to it, and binding it needs `CAP_NET_BIND_SERVICE` on any runtime that leaves `net.ipv4.ip_unprivileged_port_start` at 1024 — CRI-O does; see [image-design.md](image-design.md#the-stock-80-server-block) |
 
 `UNPRIVILEGED_PATHS` is a build arg. **Extending it is the fix for any new "Permission
@@ -179,6 +180,30 @@ rather than as failures:
   `**** Permissions could not be set … we will not provide support for it ****` line is
   upstream telling you it could not chown a path it does not need to own. The build-time
   group permissions are what make the paths usable.
+
+## nginx as a non-root master
+
+Two things in Fedora's `nginx.conf` assume a root master, and `UNPRIVILEGED=true` adjusts
+both:
+
+- **`user nginx;` is dropped.** Setting the worker user needs `CAP_SETUID`, which this
+  container never has, so nginx logs `the "user" directive makes sense only if the master
+  process runs with super-user privileges, ignored` on every start. It is genuinely
+  ignored — the workers run as the container's uid either way — so the directive is pure
+  log noise and goes.
+- **The pid file moves to `/var/lib/nginx/nginx.pid`.** `/run` is the one path in this
+  image whose permissions the *deployment* owns rather than the image: it has to be an
+  `emptyDir`, and how it arrives (mode, ownership, whether it masks the image's own
+  `/run`) is not something the image can assert. `/var/lib/nginx` is nginx's own state
+  directory, is in `UNPRIVILEGED_PATHS`, and can never be replaced by a mount.
+
+A related trap for anyone editing the Dockerfile: **`nginx -t` is not read-only.** A
+config test creates `/run/nginx.pid` and empty `access.log`/`error.log`, all root-owned,
+and in a `RUN` step those land in the image layer. A root-owned `/run/nginx.pid` baked
+into an image is invisible wherever `/run` is masked by an `emptyDir` and fatal wherever
+it is not — nginx cannot open an existing root-owned file for writing, exits, and s6
+restarts it forever. Anything that runs `nginx -t` at build time must delete what it
+leaves behind.
 
 ## Chromium and VS Code
 
