@@ -12,11 +12,10 @@ base ──> desktop ──> full
      └──> coder
 ```
 
-`coder` branches off `base`, not `desktop`, and that is what makes it lean: it never
-receives the lock screen, the flatpak runtimes or the NVIDIA hooks, so there is nothing
-to disable or revert afterwards. It also means no `RUN --security=insecure` instruction
-is in coder's build graph, so `--target coder` builds with plain `docker build` and no
-BuildKit entitlement.
+`coder` branches off `base`, not `desktop`, so it does not inherit the lock screen, the
+flatpak runtimes or the NVIDIA hooks and needs nothing disabled or reverted afterwards.
+It also means no `RUN --security=insecure` instruction is in coder's build graph, so
+`--target coder` builds with plain `docker build` and no BuildKit entitlement.
 
 ## Conventions
 
@@ -111,7 +110,7 @@ kwin's GL init could historically deadlock when `DISPLAY` pointed at a pre-bound
 unserved X socket — xcb-connect to its own listener blocked in `poll()` forever, s6
 restart-looped the desktop, and each iteration leaked a kwin. The wrapper that caused it
 is gone from current bases (kwin spawns Xwayland itself), but the strip is kept as
-zero-cost insurance: kwin never needs `DISPLAY`, and the rest of the session still gets
+insurance: kwin never needs `DISPLAY`, and the rest of the session still gets
 it from startwm's own export.
 
 It lives in `base` so every variant benefits. The lock-screen half of the same upstream
@@ -181,7 +180,7 @@ ref without knowing the host driver, and there is no GPU in the builder.
 
 `startwm_wayland.sh` launches kwin with `--no-lockscreen`. On Plasma 6 Wayland it is
 kwin, not ksmserver, that registers the `org.freedesktop.ScreenSaver` DBus service, so
-with that flag the KDE lock screen does nothing at all. Dropping the flag makes kwin
+with that flag the KDE lock screen does nothing. Dropping the flag makes kwin
 provide the locker.
 
 Locking once at session start has no ordinary path. plasmashell is launched directly
@@ -265,12 +264,12 @@ the static glvnd configs pointing at them are baked into the image.
 
 `MOZ_DISABLE_RDD_SANDBOX=1` is required for VAAPI inside Firefox's RDD sandbox. It
 weakens the sandbox around the media decoder process — acceptable for a single-user
-desktop behind authentication, but worth knowing.
+desktop behind authentication.
 
 ### AV1
 
-YouTube serves AV1 to any browser claiming support, and software dav1d decode is exactly
-the lag this variant exists to avoid. NVIDIA AV1 hardware decode only arrived with
+YouTube serves AV1 to any browser claiming support, and software dav1d decode is the lag
+this variant exists to avoid. NVIDIA AV1 hardware decode only arrived with
 Ampere, so on Pascal and Turing cards disabling AV1 makes YouTube fall back to VP9,
 which those cards decode in hardware. Set `FIREFOX_DISABLE_AV1=false` on Ampere or newer.
 
@@ -289,7 +288,7 @@ var — so your template must set **no** command or args on the container.
 s6-envdir [truncates every env value at the first
 newline](troubleshooting.md#container-env-is-truncated-at-the-first-newline). A
 multi-line init script passed as a plain env var arrives as just its shebang, the agent
-never starts, and the failure looks like nothing happening at all — no error, no log.
+never starts, and the failure looks like nothing happening — no error, no log.
 Base64 is single-line, so it survives.
 
 Decoding to a *file* rather than piping into a shell also keeps s6 supervising the agent
@@ -343,8 +342,8 @@ This stage extends the identical test to the two paths it misses: an appended
 and a `/usr/local/bin/code` wrapper that the `code` desktop entries are repointed at
 (`/usr/local/sbin` is a symlink to `bin`, so it wins in `PATH` too).
 
-Deciding at runtime rather than baking the flag in is the point: **a privileged container
-keeps its sandbox**. Do not simplify these to an unconditional `--no-sandbox`.
+Deciding at runtime rather than baking the flag in means **a privileged container keeps
+its sandbox**. Do not simplify these to an unconditional `--no-sandbox`.
 
 ### No HTTP basic auth
 
@@ -357,9 +356,9 @@ consequence to be deliberate about: run this image standalone with `:3000` publi
 there is no password in front of it — the desktop is only as private as the network path
 to it.
 
-Worth knowing about the mechanism that goes with them: enabling basic auth is a blanket
+The mechanism that goes with them: enabling basic auth is a blanket
 `sed -i 's/#//g'` over the rendered config. Nothing else in the file is commented today,
-so it does exactly what it means to — and would silently enable anything a future base
+so it does what it means to — and would silently enable anything a future base
 happens to comment out.
 
 ### TLS material lives in /run
@@ -387,7 +386,7 @@ Fedora's `nginx.conf` ships a default `server { listen 80; }` serving
 `conf.d/default.conf` on 3000/3001 — so it is dead weight that nothing routes to, and it
 is removed here.
 
-It is not merely untidy. Binding a port below 1024 needs `CAP_NET_BIND_SERVICE` unless
+Binding a port below 1024 needs `CAP_NET_BIND_SERVICE` unless
 `net.ipv4.ip_unprivileged_port_start` is 0, and that sysctl is **not** uniform across
 container runtimes: Docker and most containerd/kubelet setups default it to 0, CRI-O does
 not. So the identical unprivileged image binds :80 happily on one cluster and dies with

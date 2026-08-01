@@ -5,10 +5,10 @@
 Question this answers: the webtop layer keeps us behind on selkies — how much is it
 actually implementing, and is it worth carrying?
 
-Short version: **≈1,800 lines of bash/nginx glue and zero application code.** Every
-pixel you see is upstream selkies. What LS contributes is distro work — packaging,
+Short version: **≈1,800 lines of bash/nginx glue and zero application code.** All
+application code is upstream selkies. What LS contributes is distro work — packaging,
 supervision, ingress, GPU plumbing, hardening, KDE — plus a **vendor fork of selkies
-(`lsio`) that is the entire reason we lag.**
+(`lsio`), which is the reason we lag.**
 
 ---
 
@@ -72,7 +72,7 @@ All four `lsio` commits are pixelflux/pcmflux v2 support and GPU autoselect. So 
 *ahead* of upstream on exactly the capture path we run, and ~2 months behind on
 everything else.** Historically the flow is lsio→main (PR #252 merged their work *into*
 main on 2026-06-11), not main→lsio — so a pin bump alone never picks up upstream fixes.
-This was verified the hard way on the ls276 → ls286 bump.
+Verified on the ls276 → ls286 bump.
 
 Size of the gap (`git diff lsio main`):
 
@@ -107,9 +107,8 @@ pixelflux, in exchange for two months of upstream fixes. It buys the 2 GB packag
 the s6 supervision tree, nginx ingress + TLS, and the NVIDIA ICD/GBM fixups in
 `init-video`.
 
-Going direct-to-upstream is more viable than it looks (≈1,800 lines of glue to
-re-implement, and we already override the interesting parts), **but** `main` does not
-yet have the pixelflux v2 path LS ships, so the whole `PIXELFLUX_WAYLAND` capture mode
+Going direct-to-upstream is feasible (≈1,800 lines of glue to re-implement, and we
+already override the interesting parts), **but** `main` does not yet have the pixelflux v2 path LS ships, so the whole `PIXELFLUX_WAYLAND` capture mode
 and `SELKIES_ENCODER=x264enc`/NVENC behaviour would need re-testing from scratch. Not
 worth it today.
 

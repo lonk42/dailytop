@@ -5,7 +5,7 @@
 ```
 
 The image is loaded into the local docker daemon as `$IMAGE_NAME:$TAG`. Publishing is
-separate — see [releases](../README.md#releases).
+separate — see [releasing.md](releasing.md).
 
 | Environment variable | Default | Effect |
 |---|---|---|
@@ -21,14 +21,14 @@ separate — see [releases](../README.md#releases).
 ```
 
 Every default reproduces the reference image, so no args are required. Package-list args
-are space-separated, and an empty value skips the step entirely.
+are space-separated, and an empty value skips the step.
 
 ## The flatpak entitlement
 
 `desktop`, `full` and `k8s` install flatpaks, whose deploy step uses bwrap and therefore
 needs BuildKit's `security.insecure` entitlement. `build.sh` creates a suitable
 `docker-container` builder for those targets automatically and uses the default builder
-for `base` and `coder`, which need no entitlement at all.
+for `base` and `coder`, which need none.
 
 The `# syntax` directive must stay on the `labs` channel: `RUN --security=insecure` is a
 labs-only feature and the stable frontend fails to parse it with `unknown flag:

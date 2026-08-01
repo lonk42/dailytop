@@ -31,7 +31,7 @@ An internal CA is environment-specific. Baking one in:
 Mounting keeps one image usable everywhere, and the certificates stay in deployment
 config where they can be rotated, sealed, or managed as a Kubernetes Secret.
 
-## Behaviour worth knowing
+## Behaviour
 
 - **Trust is rebuilt from the mount on every start, not accumulated.** Anchors installed
   by a previous start are removed first, so deleting a certificate from the mount and
@@ -41,8 +41,8 @@ config where they can be rotated, sealed, or managed as a Kubernetes Secret.
   down, and a missing CA should degrade to "TLS to the internal host fails" with a log
   line rather than "no desktop". Check `docker logs` for `[custom-init]`.
 - **`update-ca-trust extract` is mandatory** and the hook always runs it. Copying a
-  certificate into the anchors directory by hand does *not* update the bundle that
-  `curl` and `openssl` read — a classic hour-waster.
+  certificate into the anchors directory by hand does not update the bundle that
+  `curl` and `openssl` read.
 - **Ordering is guaranteed.** `/custom-cont-init.d` runs after `init-adduser`/
   `init-config` and before any `svc-*`, and this hook is numbered `00-`, so everything
   that touches the network is downstream of it.

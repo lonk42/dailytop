@@ -1,8 +1,8 @@
-# Troubleshooting and hard-won details
+# Troubleshooting
 
-Notes on the LinuxServer webtop / selkies stack that cost real time to work out. Most
-of these are failures where **everything reports success** and the only symptom is that
-something looks wrong, so the diagnostic step matters more than the fix.
+Notes on the LinuxServer webtop / selkies stack. Most of these are failures where
+**everything reports success** and the only symptom is that something looks wrong, so
+the diagnostic step matters more than the fix.
 
 Logs live **only** in the container's stdout — `docker logs <container>` or
 `kubectl logs <pod>`. There is no journal and nothing on disk inside the container.
@@ -25,8 +25,7 @@ Logs live **only** in the container's stdout — `docker logs <container>` or
 
 ## The encoder model (read this first)
 
-The selkies `SELKIES_ENCODER` names are **output modes, not hardware backends**, and
-this trips everyone:
+The selkies `SELKIES_ENCODER` names are **output modes, not hardware backends**:
 
 | Value | What it actually is |
 |---|---|
@@ -92,16 +91,16 @@ never touch `/dev/dri` at all:
 The same session then paints a full Plasma desktop — **37,744 distinct colours**
 measured. No `MESA-LOADER` errors anywhere either: with no dmabuf global advertised on
 `wayland-1`, kwin and its clients stay on `wl_shm` and never probe the dead node. **This
-stack software-renders fine; it just must never be allowed to *try* the GPU first.**
+stack software-renders correctly; the probe must never be allowed to run.**
 
-`LIBGL_ALWAYS_SOFTWARE=1` is worth setting too, to keep *applications* (plasmashell,
+`LIBGL_ALWAYS_SOFTWARE=1` should be set too, to keep *applications* (plasmashell,
 Firefox, VS Code, Electron) off a driverless node — but it is defence in depth, **not**
 the fix. On its own it does nothing for the blank stream, because the compositor's probe
 is Rust/Smithay talking to GBM directly, not mesa GL.
 
 ### The two variable families have opposite polarity
 
-This is the whole trap, and it is easy to get backwards:
+The two families are read differently, and it is easy to get backwards:
 
 - `DRI_NODE` / `DRINODE` / `SELKIES_RENDER_DRI` are read with **set-ness guards**
   (`[ -z ${DRI_NODE+x} ]`), so they must be **deleted**. An empty-but-set value still
@@ -218,8 +217,8 @@ this image with `bwrap --ro-bind / / --proc /proc --unshare-pid --unshare-user`:
 Docker and Kubernetes mask 13 paths under `/proc` (`/proc/bus`, `/proc/fs`, `/proc/irq`,
 `/proc/sys`, `/proc/kcore`, …) and those masks trip the kernel's `mount_too_revealing`
 check. **`SYS_ADMIN` alone does not help.** The Kubernetes equivalent of
-`systempaths=unconfined` is `securityContext.procMount: Unmasked` — a much narrower
-grant than `privileged: true`, and it avoids the `/dev/dri` leak described above. Keep
+`systempaths=unconfined` is `securityContext.procMount: Unmasked` — a narrower grant
+than `privileged: true`, and it avoids the `/dev/dri` leak described above. Keep
 `privileged: true` only as a fallback.
 
 If your image has no flatpaks at all (like the `coder` target), you need none of this.
@@ -243,7 +242,7 @@ mkdir /tmp/e && printf 'line1\nline2\n' > /tmp/e/FOO
 This is why the Coder agent init script is passed as `CODER_AGENT_INIT_SCRIPT_B64`:
 base64 is single-line, so it survives intact. Verified failure mode without it: a 4-line
 script arrives as just `#!/usr/bin/env sh`, the agent never starts, and it looks like
-nothing happened at all.
+nothing happened.
 
 Pass anything multi-line as base64 and decode it in the run script. Decoding to a
 **file** and `exec`ing that (rather than piping into a shell) also matters when the
@@ -252,7 +251,7 @@ shell wrapping it.
 
 Related: **an s6 longrun that exits gets restarted immediately, forever.** For services
 that can be misconfigured, park (`exec sleep infinity`) with one clear log line instead
-of exiting. See the next section for why that matters so much here.
+of exiting. See the next section for why that matters here.
 
 ---
 
@@ -272,7 +271,7 @@ and s6 restarts it **every ~4 seconds forever**.
 **The noise is not the damage.** Each `dind` start mounts a tmpfs on `/tmp` and nothing
 unmounts them, so they **stack** — one anonymous tmpfs over `/tmp` per restart (192
 observed in one case). The session D-Bus socket lives at `/tmp/dbus-XXXXXXXX`, so it
-gets buried, and the failure is deeply confusing: `ss -xl` shows the socket `LISTEN`ing
+gets buried, and the failure is confusing: `ss -xl` shows the socket `LISTEN`ing
 while `ls /tmp` and even `find /` cannot see it, and anything written to `/tmp` vanishes
 within seconds. Flatpak apps needing the session bus then fail **silently** — they exit
 0 with no window and no error.
@@ -546,7 +545,7 @@ Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`
 ## Upstream patches carried here, and when to delete them
 
 The `Dockerfile` carries two patches that are **workarounds for upstream bugs, not
-choices**. Both are guarded so **the build FAILS once the bug is gone** — that failure
+choices**. Both are guarded so **the build fails once the bug is gone** — that failure
 is the removal signal, not a regression. Do not "fix" a guard failure by loosening the
 guard.
 
@@ -597,7 +596,7 @@ stage — its first guard will otherwise fail the build.
 ### 2. explicit `runc`
 
 See [`svc-docker` above](#svc-docker-restart-loop-stacks-tmpfs-on-tmp) for why a missing
-OCI runtime is genuinely destructive rather than just noisy.
+OCI runtime is destructive rather than just noisy.
 
 ```bash
 docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -c \
@@ -606,14 +605,14 @@ docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -
 
 If a runtime is present, drop `runc` from the install list and the `command -v runc`
 assertion. Harmless to keep either way, so this one is low-priority — unlike patch 1,
-which will actively break the build the moment upstream fixes it.
+which fails the build once upstream fixes it.
 
 ### Bumping the base pin
 
 The `Dockerfile` pins a specific LinuxServer release rather than the rolling
 `:fedora-kde` tag, because the rolling tag silently relocates the session scripts the
 seds patch. Every sed is grep-guarded against the exact upstream line, so a reworked
-base **fails the build loudly** instead of shipping unpatched scripts. Bumping
+base **fails the build** instead of shipping unpatched scripts. Bumping
 `WEBTOP_BASE_IMAGE` therefore means re-verifying those guards — and re-probing the X
 display number.
 
@@ -655,7 +654,7 @@ RUN echo coder
 
 `--target coder` builds with no `--allow`; `--target desktop` fails with
 `failed to load LLB: security.insecure is not allowed`. This is why keeping the flatpak
-steps out of the `coder` lineage is worth doing structurally rather than with a
+steps out of the `coder` lineage is done structurally rather than with a
 conditional — a `RUN --security=insecure` whose *body* is skipped by a shell `if` would
 still require the entitlement.
 
@@ -668,7 +667,7 @@ flags into a scratch copy if you want to lint the rest.
 **A mutable tag plus `imagePullPolicy: IfNotPresent` serves stale images.** These images
 are large enough that `IfNotPresent` is tempting, but a node that has already cached
 `:coder` will keep serving the **old** build under a pod that starts and reports
-perfectly healthy. Re-pull on every node after a push (`crictl pull`), or use immutable
+healthy. Re-pull on every node after a push (`crictl pull`), or use immutable
 tags. This is the easiest way to conclude "my fix didn't work" when it did.
 
 **Baked image env can differ from your compose file.** The image sets some env itself

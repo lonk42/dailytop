@@ -1,15 +1,15 @@
 # Running unprivileged (restricted pod security policies)
 
 `--target coder --build-arg UNPRIVILEGED=true` builds the desktop to run as a non-root
-uid with **no capabilities at all**. This is what a restricted pod security policy
-requires, and it is off by default because it makes `PUID`/`PGID` inert and relaxes group
+uid with **no capabilities**. This is what a restricted pod security policy requires,
+and it is off by default because it makes `PUID`/`PGID` inert and relaxes group
 permissions on paths the init scripts write.
 
 CI publishes this as its own variant, so you do not have to build it yourself:
 `dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls286-<version>` (immutable —
-use this one). See [releases](../README.md#releases).
+use this one). See [releasing.md](releasing.md).
 
-FIPS is a separate and much harder problem — see [FIPS](#fips) at the bottom.
+FIPS is a separate problem — see [FIPS](#fips) at the bottom.
 
 ## What the deployment must supply
 
@@ -60,12 +60,12 @@ permissions, and we're lacking the privileges to fix it.
 
 An `emptyDir` on `/run` arrives mode 2777, which s6 accepts because the image bakes
 `S6_YES_I_WANT_A_WORLD_WRITABLE_RUN_BECAUSE_KUBERNETES=1` — upstream's own escape hatch
-for exactly this. Chowning `/run` at build time would also work but only for one fixed
+for this. Chowning `/run` at build time would also work but only for one fixed
 uid, so it is deliberately not done.
 
 ## No capabilities are needed
 
-This is worth stating plainly, because it is the opposite of the obvious guess.
+This is the opposite of the obvious guess.
 
 `s6-applyuidgid` calls `setgroups()` unconditionally, which needs `CAP_SETGID`. Every
 `svc-*` in the base drops privileges with `exec s6-setuidgid abc …`, so the natural fix
@@ -86,8 +86,8 @@ s6-applyuidgid: fatal: unable to set supplementary group list: Operation not per
 
 So the capability grant buys nothing, and `UNPRIVILEGED=true` instead replaces
 `/command/s6-setuidgid` with a shim that execs straight through when it is already
-running as the target user. The upside is significant: with the shim, **nothing needs a
-capability**, so the pod satisfies the strictest stock profile with no policy exception.
+running as the target user. With the shim, **nothing needs a capability**, so the pod
+satisfies the strictest stock profile with no policy exception.
 
 Note that `PodSecurity: restricted` rejects `capabilities.add` of `SETUID`/`SETGID`
 outright, so an attempt to grant them fails admission on a PSA-restricted namespace
@@ -123,15 +123,15 @@ the gid-0 group permissions are what grant access.
 
 `chmod g=u` on `/etc/passwd` makes it writable by anything running as gid 0, which is
 what lets the passwd hook work for an unknown uid. This is the conventional pattern for
-arbitrary-uid images and it is a real relaxation: in exchange for running with no capabilities at
-all, the container gives up the read-only-ness of a handful of `/etc` paths. For a
-single-user desktop behind authentication that is a good trade, but it is a trade.
+arbitrary-uid images and it is a real relaxation: in exchange for running with no
+capabilities, the container gives up the read-only-ness of a handful of `/etc` paths.
+For a single-user desktop behind authentication that is a good trade, but it is a trade.
 
 ## pulseaudio
 
-This one is worth its own section because the symptom points nowhere near the cause: the
-pod runs, nginx serves HTTP 200 on `:3000`, every service reports `up`, and the session
-comes up **with no audio** while `svc-pulseaudio` restart-loops in the log.
+The symptom points nowhere near the cause: the pod runs, nginx serves HTTP 200 on
+`:3000`, every service reports `up`, and the session comes up **with no audio** while
+`svc-pulseaudio` restart-loops in the log.
 
 The base bakes `PULSE_RUNTIME_PATH=/defaults`. pulseaudio calls
 `pa_make_secure_dir()` on it, which does `mkdir` then `chown` — and the `chown` needs
@@ -193,14 +193,14 @@ Three things do not work unprivileged, and all three are visible as noise in the
 rather than as failures:
 
 - **`sudo` is inert.** It is setuid, and `allowPrivilegeEscalation: false` sets
-  `NoNewPrivs`, so it cannot elevate at all. `init-selkies-config`'s `sed -i /etc/sudoers`
+  `NoNewPrivs`, so it cannot elevate. `init-selkies-config`'s `sed -i /etc/sudoers`
   also fails (`sed: couldn't open temporary file /etc/sedXXXXXX`), which leaves `NOPASSWD`
-  in place — harmless precisely because `sudo` cannot work either way.
+  in place — harmless because `sudo` cannot work either way.
   `/etc/sudoers` is deliberately **not** in `UNPRIVILEGED_PATHS`; a group-writable
   sudoers is a worse idea than a cosmetic error. Where an *upstream* script reaches for
   `sudo` to do something the session user could do unaided, that is a bug here and the fix
   is to drop the `sudo` — see [Firefox: cannot open display
-  :0](troubleshooting.md#firefox-cannot-open-display-0), which is exactly that.
+  :0](troubleshooting.md#firefox-cannot-open-display-0), which is that case.
 - **Gamepad emulation is unavailable.** `init-selkies-config` does
   `mkdir -pm1777 /dev/input` and `mknod .../js0`, which need `CAP_MKNOD`. Set
   `NO_GAMEPAD=1` in the deployment to skip the attempt and quieten the log.
@@ -216,9 +216,9 @@ both:
 
 - **`user nginx;` is dropped.** Setting the worker user needs `CAP_SETUID`, which this
   container never has, so nginx logs `the "user" directive makes sense only if the master
-  process runs with super-user privileges, ignored` on every start. It is genuinely
-  ignored — the workers run as the container's uid either way — so the directive is pure
-  log noise and goes.
+  process runs with super-user privileges, ignored` on every start. It is ignored — the
+  workers run as the container's uid either way — so the directive is log noise and is
+  removed.
 - **The pid file moves to `/var/lib/nginx/nginx.pid`.** `/run` is the one path in this
   image whose permissions the *deployment* owns rather than the image: it has to be an
   `emptyDir`, and how it arrives (mode, ownership, whether it masks the image's own
@@ -235,8 +235,7 @@ leaves behind.
 
 ## Chromium and VS Code
 
-Neither can sandbox here, and it is worth being precise about why, because two separate
-mechanisms are closed at once:
+Neither can sandbox here, and two separate mechanisms are closed at once:
 
 - `chrome-sandbox` ships **not setuid** (`-rwxr-xr-x`), and `allowPrivilegeEscalation:
   false` sets `NoNewPrivs`, so the SUID sandbox could not work even if it were.
@@ -265,8 +264,7 @@ Firefox is unaffected: its sandbox uses neither setuid nor `unshare` in a way th
 profile blocks.
 
 Dropping the sandbox is a real reduction in defence-in-depth for browser content. It buys
-a desktop that runs with no capabilities at all, which is the trade this whole document
-describes.
+a desktop that runs with no capabilities, which is the trade this document describes.
 
 ## Emulating this on plain Kubernetes
 
