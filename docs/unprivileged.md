@@ -130,7 +130,8 @@ single-user desktop behind authentication that is a good trade, but it is a trad
 ## pulseaudio
 
 This one is worth its own section because the symptom points nowhere near the cause: the
-pod runs, nginx serves HTTP 200 on `:3000`, and **no desktop ever appears**.
+pod runs, nginx serves HTTP 200 on `:3000`, every service reports `up`, and the session
+comes up **with no audio** while `svc-pulseaudio` restart-loops in the log.
 
 The base bakes `PULSE_RUNTIME_PATH=/defaults`. pulseaudio calls
 `pa_make_secure_dir()` on it, which does `mkdir` then `chown` — and the `chown` needs
@@ -159,9 +160,13 @@ service reports `up`. The image therefore carries a grep-guarded sed making the 
 `${PULSE_RUNTIME_PATH:-/defaults}/pid`, which is a strict generalisation: unset, the
 behaviour is byte-identical to upstream.
 
-Diagnosing this from the outside is unpleasant, so the tell is: `svc-selkies` shows as
-`up` but its process is still `bash ./run svc-selkies` with no children, and
-`svc-pulseaudio` is `down (exitcode 1)` and restarting.
+The tell is `svc-pulseaudio` cycling `down (exitcode 1)` with
+`Failed to create secure directory (/defaults)` in the log. On a base whose `svc-selkies`
+wait is still unbounded, it is instead `svc-selkies` showing `up` while its process is
+still `bash ./run svc-selkies` with no children.
+
+The `Failed to connect to system bus` line that accompanies it is unrelated noise — there
+is no system dbus in the container, and pulseaudio logs it whether or not it starts.
 
 ### When pulseaudio does not start
 

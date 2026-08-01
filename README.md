@@ -42,7 +42,7 @@ catches up instead of silently degenerating.
 
 | Target | What it is | Notable contents |
 |---|---|---|
-| `base` | The minimum worth running. Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, awscli, helm, kubectl, k9s, Terraform; no flatpaks, no lock screen |
+| `base` | The minimum worth running. Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu; no flatpaks, no lock screen |
 | `desktop` | `base` + a human-facing desktop. | KDE lock screen, flatpak + Flathub, Spotify, claude-desktop |
 | `full` | `desktop` + a workstation toolchain. | Docker-in-Docker, sshd, yakuake, runtime password setup |
 | `k8s` | `desktop` + NVIDIA wiring for a cluster. | VAAPI/NVDEC for Firefox, glvnd EGL-on-X11 configs, no DinD/sshd |

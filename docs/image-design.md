@@ -82,6 +82,29 @@ Both `wget` and `unzip` arrive via `BASE_PACKAGES`, and the download step must s
 uses it), so it is always present; `unzip` is installed on demand, which is a no-op in a
 default build.
 
+The same step fetches `oc` and `argocd`. Two details there:
+
+- **Only `oc` is extracted from the OpenShift client tarball**, which also contains a
+  `kubectl`. `/usr/local/bin` precedes `/usr/bin` on `PATH`, so extracting the whole
+  archive would shadow Fedora's `kubectl` with whatever version that OpenShift release
+  happened to vendor.
+- **`oc` uses a different architecture spelling.** `TARGETARCH` is `amd64`/`arm64` and
+  the mirror's path component is `x86_64`/`arm64`, so `amd64` is remapped and everything
+  else passes through.
+
+### The cloud CLIs
+
+`az`, `opentofu`, `kustomize`, `rclone`, `restic` and `s3cmd` are all in Fedora's repos
+and ride in on `BASE_PACKAGES`; `awscli2` was already there. Only `gcloud` needs a vendor
+repo, so it gets its own `INSTALL_GCLOUD` switch alongside `INSTALL_VSCODE` — it is
+installed with `google-cloud-cli-gke-gcloud-auth-plugin`, without which `kubectl` cannot
+authenticate to GKE.
+
+They are not free: `azure-cli` is ~627 MB across 137 packages (the whole
+`python3-azure-*` stack) and `google-cloud-cli` a further ~449 MB for its bundled Python.
+Set `INSTALL_GCLOUD=false` and drop the unwanted names from `BASE_PACKAGES` to get that
+back.
+
 ### kwin DISPLAY strip
 
 kwin's GL init could historically deadlock when `DISPLAY` pointed at a pre-bound but

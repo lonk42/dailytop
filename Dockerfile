@@ -26,9 +26,11 @@ FROM ${WEBTOP_BASE_IMAGE} AS base
 # Packages from Fedora's own repos. Space-separated; empty skips the step.
 ARG BASE_PACKAGES="vim git tmux htop rsync net-tools firefox chromium sqlite sshfs \
 telnet spectacle unzip npm awscli2 dos2unix dejavu-fonts-all ripgrep figlet \
-kolourpaint ImageMagick strace gh jq yq bind-utils iputils wget helm kubectl"
-# Own switch because it needs Microsoft's repo, not Fedora's.
+kolourpaint ImageMagick strace gh jq yq bind-utils iputils wget helm kubectl \
+azure-cli opentofu kustomize rclone restic s3cmd"
+# Own switches because these need vendor repos, not Fedora's.
 ARG INSTALL_VSCODE=true
+ARG INSTALL_GCLOUD=true
 
 RUN if [ "${INSTALL_VSCODE}" = "true" ]; then \
 		rpm --import https://packages.microsoft.com/keys/microsoft.asc && \
@@ -46,15 +48,30 @@ RUN if [ "${INSTALL_VSCODE}" = "true" ]; then \
 		dnf makecache && \
 		dnf install -y code; \
 	fi && \
+	if [ "${INSTALL_GCLOUD}" = "true" ]; then \
+		printf '%s\n' \
+			'[google-cloud-cli]' \
+			'name=Google Cloud CLI' \
+			"baseurl=https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-\$basearch" \
+			'enabled=1' \
+			'gpgcheck=1' \
+			'repo_gpgcheck=0' \
+			'gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg' \
+			> /etc/yum.repos.d/google-cloud-cli.repo && \
+		dnf install -y google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin; \
+	fi && \
 	if [ -n "${BASE_PACKAGES}" ]; then dnf install -y ${BASE_PACKAGES}; fi && \
 	dnf clean all
 
-# Terraform + k9s: not packaged in Fedora, so pinned downloads. curl/on-demand unzip so
-# this survives `--build-arg BASE_PACKAGES=""`. docs/image-design.md#terraform-and-k9s-use-curl-not-wget
+# Terraform, k9s, oc and argocd: not packaged in Fedora, so pinned downloads. curl/on-demand
+# unzip so this survives `--build-arg BASE_PACKAGES=""`. docs/image-design.md#terraform-and-k9s-use-curl-not-wget
 ARG TERRAFORM_VERSION=1.14.8
 ARG K9S_VERSION=0.51.0
+ARG OC_VERSION=4.22.6
+ARG ARGOCD_VERSION=3.4.6
 ARG TARGETARCH
 RUN ARCH="${TARGETARCH:-amd64}" && \
+	case "${ARCH}" in amd64) OC_ARCH=x86_64 ;; *) OC_ARCH="${ARCH}" ;; esac && \
 	if ! command -v unzip >/dev/null; then dnf install -y unzip && dnf clean all; fi && \
 	curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" \
 		-o /tmp/terraform.zip && \
@@ -64,8 +81,17 @@ RUN ARCH="${TARGETARCH:-amd64}" && \
 		-o /tmp/k9s.tar.gz && \
 	tar -xzf /tmp/k9s.tar.gz -C /usr/local/bin k9s && \
 	rm -f /tmp/k9s.tar.gz && \
+	curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/${OC_ARCH}/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" \
+		-o /tmp/oc.tar.gz && \
+	tar -xzf /tmp/oc.tar.gz -C /usr/local/bin oc && \
+	rm -f /tmp/oc.tar.gz && \
+	curl -fsSL "https://github.com/argoproj/argo-cd/releases/download/v${ARGOCD_VERSION}/argocd-linux-${ARCH}" \
+		-o /usr/local/bin/argocd && \
+	chmod 0755 /usr/local/bin/argocd && \
 	terraform version >/dev/null && \
-	test -x /usr/local/bin/k9s
+	test -x /usr/local/bin/k9s && \
+	oc version --client >/dev/null && \
+	argocd version --client >/dev/null
 
 # abc/root ship with an empty shell field, which makes xterm warn and fall back.
 RUN usermod -s /bin/bash root && usermod -s /bin/bash abc

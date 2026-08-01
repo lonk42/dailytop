@@ -250,9 +250,9 @@ resource "kubernetes_pod" "main" {
       }
 
       # LSIO_NON_ROOT_USER skips init-adduser's usermod/groupmod; NO_GAMEPAD skips the
-      # /dev/input mknod, which needs CAP_MKNOD. PULSE_RUNTIME_PATH is LOAD-BEARING: the
-      # base bakes /defaults, which pulseaudio cannot chown unprivileged, and the desktop
-      # then never starts while every service reports up. docs/unprivileged.md#pulseaudio
+      # /dev/input mknod, which needs CAP_MKNOD. PULSE_RUNTIME_PATH is REQUIRED: the base
+      # bakes /defaults, which pulseaudio cannot chown unprivileged, so it restart-loops
+      # and the session has no audio. docs/unprivileged.md#pulseaudio
       dynamic "env" {
         for_each = local.unprivileged ? {
           LSIO_NON_ROOT_USER = "true"

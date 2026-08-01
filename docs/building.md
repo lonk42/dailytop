@@ -49,8 +49,11 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | `WEBTOP_BASE_IMAGE` | `lscr.io/linuxserver/webtop:fedora-kde-37cda392-ls286` | Pinned deliberately, not rolling — see [the base pin](image-design.md#the-base-pin) |
 | `BASE_PACKAGES` | *(the CLI toolkit — see the Dockerfile)* | From Fedora's repos |
 | `INSTALL_VSCODE` | `true` | Needs Microsoft's repo, hence its own switch |
+| `INSTALL_GCLOUD` | `true` | Needs Google's repo, hence its own switch; pulls `gcloud` and the GKE auth plugin, ~449 MB |
 | `TERRAFORM_VERSION` | `1.14.8` | Not packaged in Fedora, so a pinned download |
 | `K9S_VERSION` | `0.51.0` | Not packaged in Fedora, so a pinned download |
+| `OC_VERSION` | `4.22.6` | OpenShift client, from `mirror.openshift.com` |
+| `ARGOCD_VERSION` | `3.4.6` | Not packaged in Fedora, so a pinned download |
 
 ### desktop
 
