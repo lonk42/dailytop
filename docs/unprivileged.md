@@ -13,7 +13,9 @@ FIPS is a separate problem — see [FIPS](#fips) at the bottom.
 
 ## What the deployment must supply
 
-Three things, and all three are load-bearing:
+Three things, and all three are load-bearing. The
+[Helm chart](../charts/dailytop/README.md) sets every one of them from
+`unprivileged.enabled`; this is what it writes, and what to write by hand otherwise:
 
 ```yaml
 securityContext:                 # pod

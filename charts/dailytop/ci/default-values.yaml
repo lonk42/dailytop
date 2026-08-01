@@ -1,0 +1,8 @@
+# Defaults plus an Ingress, which is off by default and so otherwise never rendered.
+ingress:
+  enabled: true
+  className: traefik
+  host: desktop.example.com
+  tls:
+    enabled: true
+    secretName: wildcard-example-com-tls

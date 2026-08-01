@@ -59,10 +59,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ADD VARIANTS HERE. `full` and `k8s` are heavy -- see the disk note below.
+          # ADD VARIANTS HERE. `full` is heavy -- see the disk note below.
           RELEASE_VARIANTS='[
             {"name": "coder",        "target": "coder", "args": ""},
-            {"name": "coder-unpriv", "target": "coder", "args": "UNPRIVILEGED=true"}
+            {"name": "coder-unpriv", "target": "coder", "args": "UNPRIVILEGED=true"},
+            {"name": "k8s",          "target": "k8s",   "args": ""}
           ]'
 
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then

@@ -1,0 +1,209 @@
+# Default values for dailytop. Reference: charts/dailytop/README.md
+#
+# The defaults deploy a software-rendered desktop that schedules anywhere. GPU
+# acceleration, the unprivileged variant and flatpak support are opt-in below.
+
+image:
+  repository: ghcr.io/lonk42/dailytop
+  # Image variant, prefixed to the chart's appVersion to form the tag: `k8s` gives
+  # `k8s-ls286-1.0.0`. Set `tag` to override the whole thing.
+  variant: k8s
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# One desktop per release. The /config PVC is ReadWriteOnce, so a second replica
+# cannot schedule; the Deployment strategy is Recreate for the same reason.
+replicaCount: 1
+
+# Environment for the desktop container. Keys set here win over every default the
+# chart adds for `gpu`, `unprivileged` and `flatpak` below.
+env:
+  TZ: UTC
+  TITLE: dailytop
+  KEYBOARD: en-us-qwerty
+  SUBFOLDER: /
+  # Native Wayland capture. docs/troubleshooting.md#the-encoder-model-read-this-first
+  PIXELFLUX_WAYLAND: "true"
+  # Firefox's native-Wayland path freezes against this compositor, and the image's
+  # VAAPI prefs assume XWayland.
+  MOZ_ENABLE_WAYLAND: "0"
+  # Ordered encoder fallback list, set by the chart: `x264enc-striped,jpeg` (both CPU
+  # encoders), or `x264enc,x264enc-striped,jpeg` when `gpu.enabled` puts the hardware
+  # path first. Uncomment to pin it yourself.
+  # SELKIES_ENCODER: x264enc-striped,jpeg
+  # The KDE lock screen needs a password to open it. Leave locking off unless
+  # `auth.existingSecret` supplies one. docs/image-design.md#the-kde-lock-screen
+  LOCK_ON_STARTUP: "false"
+
+# Raw env entries, appended after `env`. Use for valueFrom.
+extraEnv: []
+# - name: SOME_KEY
+#   valueFrom:
+#     secretKeyRef: { name: my-secret, key: some-key }
+
+envFrom: []
+
+# Password for the in-desktop `abc` and `root` accounts, applied at container start by
+# the image's 01-set-passwords.sh hook. Present in `full` and `k8s`; the `coder` and
+# `base` images have no such hook and ignore it.
+auth:
+  # Secret holding the password. The chart creates no Secret of its own -- make it with
+  #   kubectl create secret generic dailytop-credentials --from-literal=USER_PASSWORD=...
+  existingSecret: ""
+  secretKey: USER_PASSWORD
+
+# Extra root CAs, installed before any service starts by the image's 00-ca-certs.sh.
+# Every key ending .crt / .pem in the Secret is trusted. See certs/README.md.
+caCerts:
+  enabled: false
+  existingSecret: ""
+  mountPath: /certs
+
+# Scripts dropped into /custom-cont-init.d and run before any service starts.
+#
+# Mounted one file at a time with subPath, never as a directory: a directory mount
+# replaces /custom-cont-init.d outright and hides every hook baked into the image.
+# docs/image-design.md#the-init-hooks
+initScripts: {}
+# 50-example.sh: |
+#   #!/bin/bash
+#   echo "[custom-init] hello"
+
+gpu:
+  # NVIDIA acceleration. Requires the container runtime to inject the userspace driver
+  # -- exposing device nodes is not enough.
+  # docs/troubleshooting.md#nvidia-exposing-devices-is-not-injecting-the-driver
+  enabled: false
+  runtimeClassName: nvidia
+  # Requested and limited alike; a GPU cannot be overcommitted.
+  resourceName: nvidia.com/gpu
+  count: 1
+  # Adds NVIDIA_VISIBLE_DEVICES, NVIDIA_DRIVER_CAPABILITIES, DRINODE, DRI_NODE, the
+  # hardware encoder list and MOZ_ENABLE_WAYLAND=0. Any of them can be overridden in
+  # `env` above.
+  driverCapabilities: all
+  driNode: /dev/dri/renderD128
+
+  # NVIDIA's EGL-on-X11 platform libraries. They are driver-version-locked and the GPU
+  # operator does not inject them; the image bakes the glvnd configs that name them, so
+  # without these mounts Firefox falls back to software WebRender and loses hardware
+  # video decode. docs/image-design.md#firefox-egl-on-x11-then-vaapi
+  eglPlatformLibs:
+    enabled: true
+    # Node path holding libnvidia-egl-xcb.so.1 and libnvidia-egl-xlib.so.1. This is the
+    # Debian/Ubuntu layout; on a Fedora/RHEL node it is /usr/lib64.
+    hostPath: /usr/lib/x86_64-linux-gnu
+    # Where they land in the container, which is Fedora.
+    containerPath: /usr/lib64
+
+# For an image built with `--build-arg UNPRIVILEGED=true`. Runs the session as a
+# non-root uid with no capabilities under `restricted` PodSecurity. The /run emptyDir
+# this switches on is not optional -- without it s6-overlay's preinit exits before any
+# service starts. docs/unprivileged.md
+unprivileged:
+  enabled: false
+  # Any uid that does not collide with an entry in the image's /etc/passwd. Leave null
+  # to let the platform assign one (OpenShift does).
+  runAsUser: 9999
+
+# flatpak's bwrap sandbox needs an unmasked /proc, which needs an unconfined seccomp
+# profile and the ProcMountType feature gate. Only the `desktop`, `full` and `k8s`
+# images ship flatpaks; where the gate is off, set `privileged: true` under
+# `containerSecurityContext` instead.
+# docs/troubleshooting.md#what-privileged-actually-buys-unmasked-proc
+flatpak:
+  enabled: false
+
+# Merged over whatever `unprivileged` and `flatpak` select, and win where they overlap.
+podSecurityContext: {}
+containerSecurityContext: {}
+
+service:
+  type: ClusterIP
+  annotations: {}
+  ports:
+    # The selkies client refuses to start on plain HTTP unless the browser already
+    # considers the origin secure -- which it does behind a TLS-terminating Ingress.
+    http: 3000
+    https: 3001
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  path: /
+  pathType: Prefix
+  # Service port to route to. `http` is right behind a TLS-terminating Ingress; `https`
+  # additionally needs your controller configured to talk TLS to the backend.
+  port: http
+  tls:
+    enabled: false
+    # Existing certificate Secret. Leave empty to let cert-manager create one from the
+    # issuer named in `ingress.annotations`.
+    secretName: ""
+
+persistence:
+  config:
+    # The KDE profile, application data and caches. Disabled gives an emptyDir, and the
+    # desktop resets on every restart.
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 50Gi
+    # Keeps the PVC when the release is uninstalled.
+    retain: false
+  # Chromium and Electron applications crash on the 64 MiB default /dev/shm.
+  shm:
+    enabled: true
+    sizeLimit: 2Gi
+
+extraVolumes: []
+extraVolumeMounts: []
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 4Gi
+  limits:
+    memory: 16Gi
+    # No CPU limit by default. Software H.264 encode of a desktop stream is bursty and
+    # CPU-bound; a limit throttles the stream rather than the workload.
+
+# TCP probes rather than HTTP: the desktop sits behind whatever authentication the
+# Ingress adds, and a redirect or a 401 is a healthy backend.
+probes:
+  startup:
+    enabled: true
+    # 5 minutes. A cold /config is slow the first time; the image builds a KDE profile.
+    periodSeconds: 5
+    failureThreshold: 60
+  readiness:
+    enabled: true
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    # Restarting a desktop pod destroys the running session, so this is deliberately
+    # slack: three and a half minutes of a dead port before it acts.
+    enabled: true
+    periodSeconds: 30
+    failureThreshold: 7
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

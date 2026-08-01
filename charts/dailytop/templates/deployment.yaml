@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dailytop.fullname" . }}
+  labels:
+    {{- include "dailytop.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # The /config PVC is ReadWriteOnce, so a RollingUpdate deadlocks with a
+    # Multi-Attach error when the new pod lands on another node.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dailytop.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- if or .Values.initScripts .Values.podAnnotations }}
+      annotations:
+        {{- if .Values.initScripts }}
+        checksum/init-scripts: {{ include (print $.Template.BasePath "/configmap-init.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "dailytop.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "dailytop.serviceAccountName" . }}
+      {{- if .Values.gpu.enabled }}
+      runtimeClassName: {{ .Values.gpu.runtimeClassName }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with include "dailytop.podSecurityContext" . | trim }}
+      securityContext:
+        {{- . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: desktop
+          image: {{ include "dailytop.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with include "dailytop.containerSecurityContext" . | trim }}
+          securityContext:
+            {{- . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- include "dailytop.env" . | trim | nindent 12 }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.ports.http }}
+              protocol: TCP
+            - name: https
+              containerPort: {{ .Values.service.ports.https }}
+              protocol: TCP
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- $resources := deepCopy .Values.resources }}
+            {{- if .Values.gpu.enabled }}
+            {{- $limits := merge (dict .Values.gpu.resourceName .Values.gpu.count) (default dict $resources.limits) }}
+            {{- $_ := set $resources "limits" $limits }}
+            {{- end }}
+            {{- toYaml $resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            {{- if .Values.persistence.shm.enabled }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
+            {{- if .Values.unprivileged.enabled }}
+            - name: run
+              mountPath: /run
+            {{- end }}
+            {{- if .Values.caCerts.enabled }}
+            - name: ca-certs
+              mountPath: {{ .Values.caCerts.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.initScripts }}
+            # subPath, one file at a time, so the hooks baked into the image survive.
+            {{- end }}
+            {{- range $name, $_ := .Values.initScripts }}
+            - name: init-scripts
+              mountPath: /custom-cont-init.d/{{ $name }}
+              subPath: {{ $name }}
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.gpu.enabled .Values.gpu.eglPlatformLibs.enabled }}
+            {{- range $lib := list "libnvidia-egl-xcb.so.1" "libnvidia-egl-xlib.so.1" }}
+            - name: {{ $lib | replace "." "-" | replace "_" "-" }}
+              mountPath: {{ $.Values.gpu.eglPlatformLibs.containerPath }}/{{ $lib }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          {{- if .Values.persistence.config.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.config.existingClaim | default (printf "%s-config" (include "dailytop.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.persistence.shm.enabled }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.persistence.shm.sizeLimit }}
+        {{- end }}
+        {{- if .Values.unprivileged.enabled }}
+        # Fatal to omit: s6-overlay's preinit exits before any service starts without a
+        # writable /run. docs/unprivileged.md
+        - name: run
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.caCerts.enabled }}
+        - name: ca-certs
+          secret:
+            secretName: {{ required "caCerts.existingSecret is required when caCerts.enabled" .Values.caCerts.existingSecret }}
+        {{- end }}
+        {{- if .Values.initScripts }}
+        - name: init-scripts
+          configMap:
+            name: {{ include "dailytop.initScriptsName" . }}
+            defaultMode: 0755
+        {{- end }}
+        {{- if and .Values.gpu.enabled .Values.gpu.eglPlatformLibs.enabled }}
+        {{- range $lib := list "libnvidia-egl-xcb.so.1" "libnvidia-egl-xlib.so.1" }}
+        - name: {{ $lib | replace "." "-" | replace "_" "-" }}
+          hostPath:
+            path: {{ $.Values.gpu.eglPlatformLibs.hostPath }}/{{ $lib }}
+            type: File
+        {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

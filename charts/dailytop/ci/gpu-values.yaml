@@ -1,0 +1,44 @@
+# The `k8s` variant on an NVIDIA node, with flatpak apps and an internal CA.
+image:
+  variant: k8s
+
+gpu:
+  enabled: true
+
+flatpak:
+  enabled: true
+
+caCerts:
+  enabled: true
+  existingSecret: dailytop-ca
+
+auth:
+  existingSecret: dailytop-credentials
+
+env:
+  TITLE: Desktop
+  TZ: Pacific/Auckland
+
+initScripts:
+  50-example.sh: |
+    #!/bin/bash
+    echo "[custom-init] example"
+
+persistence:
+  config:
+    size: 30Gi
+    storageClass: nvme-replicated
+    retain: true
+
+nodeSelector:
+  kubernetes.io/hostname: gpu-node
+
+ingress:
+  enabled: true
+  className: traefik
+  host: desktop.example.com
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  tls:
+    enabled: true
+    secretName: wildcard-example-com-tls

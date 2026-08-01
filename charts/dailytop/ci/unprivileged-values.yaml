@@ -1,0 +1,11 @@
+# The unprivileged variant under `restricted` PodSecurity, no GPU.
+image:
+  variant: coder-unpriv
+
+unprivileged:
+  enabled: true
+  runAsUser: 9999
+
+persistence:
+  config:
+    size: 20Gi

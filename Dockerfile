@@ -437,7 +437,7 @@ RUN --security=insecure \
 #  k8s -- NVIDIA VAAPI / EGL wiring for a Kubernetes deployment
 # =============================================================================
 # Omits the full image's toolchain, DinD and sshd; adds only the GPU/display fixes a
-# clustered NVIDIA deployment needs. See examples/k8s/.
+# clustered NVIDIA deployment needs. Deployed by the chart in charts/dailytop/.
 FROM desktop AS k8s
 
 # libva-utils = vainfo; the rest are cluster debugging conveniences.
@@ -467,6 +467,42 @@ RUN mkdir -p /usr/lib64/firefox/browser/defaults/preferences && \
 		echo 'pref("media.rdd-ffmpeg.enabled", true);'; \
 		if [ "${FIREFOX_DISABLE_AV1}" = "true" ]; then echo 'pref("media.av1.enabled", false);'; fi; \
 	} > /usr/lib64/firefox/browser/defaults/preferences/vaapi.js
+
+# The runtime injects the GBM backend into the node's libdir; Fedora's libgbm only
+# searches /usr/lib64/gbm, so without a link there kwin falls back to software rendering.
+# docs/image-design.md#nvidia-libraries-land-in-the-wrong-libdir
+RUN cat > /custom-cont-init.d/06-nvidia-gbm-link.sh <<'EOF'
+#!/bin/bash
+ALLOC=$(find /usr/lib /usr/lib64 -name 'libnvidia-allocator.so.1' 2>/dev/null | head -1)
+if [ -z "${ALLOC}" ]; then
+  echo "[custom-init] libnvidia-allocator not found; GPU GBM unavailable"
+  exit 0
+fi
+mkdir -p /usr/lib64/gbm
+ln -sf "${ALLOC}" /usr/lib64/gbm/nvidia-drm_gbm.so
+echo "[custom-init] linked nvidia GBM backend -> ${ALLOC}"
+EOF
+
+# NVIDIA's vendor libraries resolve their core libraries relative to their own libdir
+# rather than through ldconfig, so an injection into a foreign libdir yields EGL/GL that
+# initialises and renders black.
+# docs/image-design.md#nvidia-libraries-land-in-the-wrong-libdir
+RUN cat > /custom-cont-init.d/07-nvidia-glcore-links.sh <<'EOF'
+#!/bin/bash
+n=0
+for base in eglcore glcore glsi tls glvkspirv rtcore gpucomp; do
+  f=$(find /usr/lib -name "libnvidia-${base}.so.*" 2>/dev/null | head -1)
+  [ -n "${f}" ] || continue
+  ln -sf "${f}" /usr/lib64/"$(basename "${f}")" && n=$((n+1))
+done
+[ "${n}" -eq 0 ] && exit 0
+ldconfig
+echo "[custom-init] linked ${n} nvidia GL core libs into /usr/lib64 + ran ldconfig"
+EOF
+
+RUN chmod 0755 /custom-cont-init.d/06-nvidia-gbm-link.sh /custom-cont-init.d/07-nvidia-glcore-links.sh && \
+	bash -n /custom-cont-init.d/06-nvidia-gbm-link.sh && \
+	bash -n /custom-cont-init.d/07-nvidia-glcore-links.sh
 
 # Baked so it travels with the prefs above. MOZ_DISABLE_RDD_SANDBOX weakens the sandbox
 # around Firefox's media decoder -- required for VAAPI there, and a real trade-off.

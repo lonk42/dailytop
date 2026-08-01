@@ -1,0 +1,23 @@
+apiVersion: v2
+name: dailytop
+description: A containerised KDE Plasma desktop in your browser, on Kubernetes
+type: application
+home: https://github.com/lonk42/dailytop
+sources:
+  - https://github.com/lonk42/dailytop
+keywords:
+  - desktop
+  - kde
+  - webtop
+  - selkies
+  - vdi
+maintainers:
+  - name: lonk42
+    url: https://github.com/lonk42
+
+# Overwritten at publish time from the git tag. docs/releasing.md
+version: 1.0.0
+
+# The image release this chart defaults to, in the `<lsNNN>-<version>` form the immutable
+# image tags use. `image.variant` is prefixed to it to select a variant.
+appVersion: "ls286-1.0.0"

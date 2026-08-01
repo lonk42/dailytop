@@ -10,9 +10,8 @@ packaged for Kubernetes, [Coder](https://coder.com) workspaces and Docker.
 dailytop is a much fatter base including support for a larger variety of desktop tools.
 
 - **Multiple deployment targets.** Single host via compose, Kubernetes, or a Coder
-  workspace, selected with `--target`. Working examples for
-  [Kubernetes](examples/k8s/dailytop.yaml) and
-  [Coder](examples/coder-template/main.tf) are included.
+  workspace, selected with `--target`. A [Helm chart](charts/dailytop/README.md) and a
+  working [Coder template](examples/coder-template/main.tf) are included.
 - **Coder workspace support.** The agent runs as an s6 service rather than the container
   entrypoint. Subdomain apps, no HTTP basic auth, and TLS material kept out of the
   workspace volume.
@@ -90,20 +89,22 @@ the `USER_PASSWORD` you set, or set `LOCK_ON_STARTUP=false` to skip it.
 
 ### Kubernetes
 
+The [Helm chart](charts/dailytop/README.md) needs no build and no checkout:
+
 ```bash
-./build.sh k8s
-docker tag dailytop:k8s <registry>/dailytop:k8s && docker push <registry>/dailytop:k8s
-$EDITOR examples/k8s/dailytop.yaml        # image, storage class, NVIDIA paths
-kubectl apply -f examples/k8s/dailytop.yaml
+helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version 1.0.0 \
+  --set ingress.enabled=true --set ingress.className=traefik \
+  --set ingress.host=desktop.example.com --set ingress.tls.enabled=true
 ```
 
-Exposes a `dailytop` Service on 3000/3001; route to 3001 with your own Ingress. The 2 GiB
-`/dev/shm` `emptyDir` that Chromium and Electron need is already in the manifest.
+Add `--set gpu.enabled=true --set flatpak.enabled=true` on an NVIDIA node. That requests
+a GPU, sets `runtimeClassName: nvidia` and mounts the driver-locked `libnvidia-egl-*`
+libraries from `/usr/lib/x86_64-linux-gnu` — the Debian and Ubuntu layout, so set
+`gpu.eglPlatformLibs.hostPath=/usr/lib64` for a Fedora or RHEL node.
 
-The example targets a **GPU node**: `runtimeClassName: nvidia` and two `hostPath` mounts
-for the driver-locked `libnvidia-egl-*` libraries are live, with paths as a Debian node
-spells them. Fix those paths for your nodes, or delete all three for a software-rendered
-deployment.
+The chart's image tag is composed from `image.variant` and its own appVersion, so a
+chart pulled at `--version 1.0.0` runs the images that same git tag built. Every value is
+in the [chart README](charts/dailytop/README.md).
 
 ### Coder
 
@@ -157,7 +158,9 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
 
 - **Single host** — [`docker-compose.yaml`](docker-compose.yaml); NVIDIA support is
   inline and commented out.
-- **Kubernetes** (`k8s` target) — [`examples/k8s/dailytop.yaml`](examples/k8s/dailytop.yaml).
+- **Kubernetes** (`k8s` target) — the Helm chart at
+  [`charts/dailytop`](charts/dailytop/README.md), published as
+  `oci://ghcr.io/lonk42/charts/dailytop`.
 - **Coder** (`coder` target) —
   [`examples/coder-template/main.tf`](examples/coder-template/main.tf). Coder
   authenticates at its proxy, so this variant drops webtop's own basic auth

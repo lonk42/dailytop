@@ -50,6 +50,8 @@ s6-rc-db -c <db> all-dependencies init-custom-files | grep -x init-selkies-confi
 | `03-nvidia-flatpak-gl.sh` | desktop | [Match the host driver](#nvidia-flatpak-gl-extension) |
 | `04-no-gpu.sh` | coder | [Neutralise the GPU autodetect](#neutralising-the-gpu-autodetect) |
 | `05-unpriv-passwd.sh` | coder, `UNPRIVILEGED=true` only | [A passwd entry for an arbitrary uid](unprivileged.md#what-the-image-changes) |
+| `06-nvidia-gbm-link.sh` | k8s | [The GBM backend, in Fedora's libdir](#nvidia-libraries-land-in-the-wrong-libdir) |
+| `07-nvidia-glcore-links.sh` | k8s | [The GL and EGL cores, likewise](#nvidia-libraries-land-in-the-wrong-libdir) |
 
 ## base
 
@@ -265,6 +267,28 @@ the static glvnd configs pointing at them are baked into the image.
 `MOZ_DISABLE_RDD_SANDBOX=1` is required for VAAPI inside Firefox's RDD sandbox. It
 weakens the sandbox around the media decoder process — acceptable for a single-user
 desktop behind authentication.
+
+### NVIDIA libraries land in the wrong libdir
+
+The container runtime injects the userspace driver into the *node's* library layout. On a
+Debian or Ubuntu node that is `/usr/lib/x86_64-linux-gnu`; this image is Fedora, which
+searches `/usr/lib64`. Two things break, both without an error message:
+
+- **GBM.** Fedora's libgbm only looks in `/usr/lib64/gbm`, so kwin cannot allocate a
+  buffer on the GPU and falls back to the Pixman software renderer. The streamed desktop
+  renders black while NVENC still appears to work.
+- **The GL and EGL cores.** NVIDIA's vendor libraries resolve `libnvidia-eglcore` and
+  friends relative to their own libdir rather than through ldconfig, so being in the
+  ldconfig cache is not enough. Removing the links reproducibly black-screens the desktop
+  with all seven cores present.
+
+`06-nvidia-gbm-link.sh` and `07-nvidia-glcore-links.sh` locate the injected libraries at
+startup and symlink them into Fedora's paths, so the fix tracks whatever driver version
+the node runs and needs no `hostPath` mount of the driver directory. Both no-op when
+nothing was injected.
+
+This is separate from the EGL-on-X11 platform libraries above, which are not injected at
+all and do need a mount.
 
 ### AV1
 

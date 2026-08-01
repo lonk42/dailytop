@@ -1,0 +1,130 @@
+---
+# Lint the Helm chart on every change to it, and publish it to GHCR as an OCI artifact
+# on a tag.
+#
+# The same git tag that builds the images publishes the chart, so a release is one tag:
+# `1.1.0` gives `oci://ghcr.io/<owner>/charts/dailytop:1.1.0` with appVersion
+# `ls286-1.1.0`, and the chart's default image tag then resolves to the images that tag
+# built. Scheme and rationale: docs/releasing.md
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    paths:
+      - 'charts/**'
+      - '.github/workflows/publish-chart.yml'
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push to GHCR (unchecked = package only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  CHART_DIR: charts/dailytop
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          # Pinned: `latest` resolves through the GitHub API and is rate-limited.
+          version: v4.2.2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint
+        run: helm lint "$CHART_DIR"
+
+      # Every ci/*-values.yaml is a shape the chart must keep rendering: the defaults,
+      # the GPU deployment, the unprivileged one.
+      - name: Render every values file
+        run: |
+          set -euo pipefail
+          helm template smoke "$CHART_DIR" > /dev/null
+          for f in "$CHART_DIR"/ci/*-values.yaml; do
+            echo "::group::$f"
+            helm template smoke "$CHART_DIR" --values "$f"
+            echo "::endgroup::"
+          done
+
+  publish:
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          # Pinned: `latest` resolves through the GitHub API and is rate-limited.
+          version: v4.2.2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Plan the release
+        id: plan
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="0.0.0-${GITHUB_SHA::7}"
+          fi
+
+          # Helm requires SemVer 2 for a chart version, which is stricter than what a
+          # git tag allows. Catch it before packaging.
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error::git tag '$version' is not a SemVer 2 chart version"
+            exit 1
+          fi
+
+          # Same base pin the images are built from, so the chart's default image tag
+          # names images that exist. Read from the Dockerfile, never hardcoded.
+          base=$(sed -n 's/^ARG WEBTOP_BASE_IMAGE=//p' Dockerfile | head -1)
+          suffix=$(printf '%s' "${base##*:}" | grep -oE 'ls[0-9]+$' || true)
+          if [ -z "$suffix" ]; then
+            echo "::error::base tag '${base##*:}' has no trailing lsNNN component"
+            exit 1
+          fi
+
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+
+          {
+            echo "version=$version"
+            echo "app_version=${suffix}-${version}"
+            echo "registry=oci://ghcr.io/${owner}/charts"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        run: |
+          helm package "$CHART_DIR" \
+            --version '${{ steps.plan.outputs.version }}' \
+            --app-version '${{ steps.plan.outputs.app_version }}' \
+            --destination dist
+
+      - name: Log in to GHCR
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        run: |
+          helm registry login ghcr.io \
+            --username '${{ github.actor }}' \
+            --password '${{ secrets.GITHUB_TOKEN }}'
+
+      - name: Push
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        run: helm push dist/dailytop-'${{ steps.plan.outputs.version }}'.tgz '${{ steps.plan.outputs.registry }}'
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| chart | \`${{ steps.plan.outputs.registry }}/dailytop:${{ steps.plan.outputs.version }}\` |"
+            echo "| appVersion | \`${{ steps.plan.outputs.app_version }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

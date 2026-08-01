@@ -1,0 +1,30 @@
+{{ include "dailytop.fullname" . }} is starting {{ include "dailytop.image" . }}.
+
+The first start builds a KDE profile on a cold /config and takes a few minutes. Follow it:
+
+  kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "dailytop.fullname" . }}
+
+Reach the desktop at:
+{{- if .Values.ingress.enabled }}
+
+  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else }}
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "dailytop.fullname" . }} 3001:{{ .Values.service.ports.https }}
+
+then open https://localhost:3001/ -- the client refuses to start on a non-secure
+origin, so use the HTTPS port and accept the self-signed certificate.
+{{- end }}
+{{- if .Values.gpu.enabled }}
+
+GPU acceleration is on. Confirm the runtime injected the driver, rather than assuming it:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "dailytop.fullname" . }} -- nvidia-smi
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "dailytop.fullname" . }} | grep -E 'Driver:|Mode:'
+{{- end }}
+{{- if not .Values.auth.existingSecret }}
+
+No auth.existingSecret is set, so the in-desktop `abc` and `root` accounts keep the
+image's password and the KDE lock screen cannot be unlocked. Keep LOCK_ON_STARTUP false,
+or create a Secret and point auth.existingSecret at it.
+{{- end }}
