@@ -46,19 +46,19 @@ dailytop is a much fatter base including support for a larger variety of desktop
 
 | Variant | GPU support | Docker in Docker | Lockscreen | Unprivileged |
 |---|:---:|:---:|:---:|:---:|
-| `base` | ❌ | ❌ † | ❌ | ❌ |
-| `desktop` | ✅ | ❌ † | ✅ | ❌ |
+| `base` | ❌ | ❌ \* | ❌ | ❌ |
+| `desktop` | ✅ | ❌ \* | ✅ | ❌ |
 | `full` | ✅ | ✅ | ✅ | ❌ |
-| `k8s` | ✅ ‡ | ❌ | ✅ | ❌ |
-| `coder` | ❌ | ❌ | ❌ | ✅ § |
+| `k8s` | ✅ \*\* | ❌ | ✅ | ❌ |
+| `coder` | ❌ | ❌ | ❌ | ✅ \*\*\* |
 
-- **†** `base` and `desktop` still carry the upstream `svc-docker` service with no OCI
+- \* `base` and `desktop` still carry the upstream `svc-docker` service with no OCI
   runtime behind it, so dockerd restart-loops and [stacks a tmpfs on
   `/tmp`](docs/troubleshooting.md#svc-docker-restart-loop-stacks-tmpfs-on-tmp). `full`
   installs `runc`; `k8s` and `coder` remove the service.
-- **‡** `k8s` adds VAAPI/NVDEC and the glvnd EGL-on-X11 configs on top of `desktop`'s
+- \*\* `k8s` adds VAAPI/NVDEC and the glvnd EGL-on-X11 configs on top of `desktop`'s
   NVIDIA flatpak GL hook.
-- **§** Opt-in, via `--build-arg UNPRIVILEGED=true` — published as the `coder-unpriv`
+- \*\*\* Opt-in, via `--build-arg UNPRIVILEGED=true` — published as the `coder-unpriv`
   variant.
 
 ```
@@ -119,7 +119,7 @@ Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls286-<version>` and
 CA, `local.ca_cert_secret` is required — without it the agent's first curl fails `x509`
 and the workspace never reports healthy, with the desktop up the whole time.
 
-## Using it
+## Configuration
 
 ### NVIDIA
 
