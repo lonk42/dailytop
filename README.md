@@ -37,9 +37,9 @@ dailytop is a much fatter base including support for a larger variety of desktop
 
 | Target | What it is | Notable contents |
 |---|---|---|
-| `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu; no flatpaks |
+| `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu, yakuake; no flatpaks |
 | `desktop` | `base` + a full desktop session. | flatpak + Flathub, Spotify, claude-desktop |
-| `full` | `desktop` + a workstation toolchain. | sshd, yakuake, runtime password setup |
+| `full` | `desktop` + a workstation toolchain. | sshd, DinD, runtime password setup |
 | `k8s` | `desktop` + NVIDIA wiring for a cluster. | VAAPI/NVDEC for Firefox, glvnd EGL-on-X11 configs, no sshd |
 | `coder` | A [Coder](https://coder.com) workspace. | `base` + the Coder agent as an s6 service; no flatpaks, no HTTP basic auth |
 
@@ -92,7 +92,7 @@ the `USER_PASSWORD` you set, or set `LOCK_ON_STARTUP=false` to skip it.
 The [Helm chart](charts/dailytop/README.md) needs no build and no checkout:
 
 ```bash
-helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version 1.0.0 \
+helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version <version> \
   --set ingress.enabled=true --set ingress.className=traefik \
   --set ingress.host=desktop.example.com --set ingress.tls.enabled=true
 ```
@@ -102,9 +102,9 @@ a GPU, sets `runtimeClassName: nvidia` and mounts the driver-locked `libnvidia-e
 libraries from `/usr/lib/x86_64-linux-gnu` — the Debian and Ubuntu layout, so set
 `gpu.eglPlatformLibs.hostPath=/usr/lib64` for a Fedora or RHEL node.
 
-The chart's image tag is composed from `image.variant` and its own appVersion, so a
-chart pulled at `--version 1.0.0` runs the images that same git tag built. Every value is
-in the [chart README](charts/dailytop/README.md).
+The chart's image tag is composed from `image.variant` and its own appVersion, so a chart
+pulled at `--version <version>` runs the images that same git tag built. Every value is in
+the [chart README](charts/dailytop/README.md).
 
 ### Coder
 

@@ -69,7 +69,7 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 
 | Arg | Default | Notes |
 |---|---|---|
-| `FULL_PACKAGES` | `yakuake sshpass irssi mutt` | |
+| `FULL_PACKAGES` | `sshpass irssi mutt` | |
 | `FULL_FLATPAKS` | *(empty)* | Extra flatpaks for this target only, e.g. `org.gimp.GIMP` |
 | `INSTALL_DIND` | `true` | `false` **removes** the base's `svc-docker`, which is mandatory without the toolchain — [why](image-design.md#docker-in-docker-and-explicit-runc) |
 | `INSTALL_SSHD` | `true` | [Unprivileged sshd, key auth only](image-design.md#sshd) |
@@ -80,7 +80,7 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 
 | Arg | Default | Notes |
 |---|---|---|
-| `K8S_PACKAGES` | `libva-utils iproute mlocate` | `vainfo` plus cluster debugging conveniences |
+| `K8S_PACKAGES` | `libva-utils iproute plocate` | `vainfo` plus cluster debugging conveniences |
 | `FIREFOX_DISABLE_AV1` | `true` | [Set `false` on Ampere or newer](image-design.md#av1) |
 
 ### coder

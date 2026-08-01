@@ -4,7 +4,7 @@ Deploys a [dailytop](https://github.com/lonk42/dailytop) desktop — one Deploym
 Service, a `/config` PVC, and an optional Ingress.
 
 ```bash
-helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version 1.0.0
+helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version <version>
 ```
 
 The defaults are software-rendered and schedule anywhere. Access is **HTTPS on port
@@ -13,7 +13,7 @@ non-secure origin (`FATAL: Not in a secure context. WebCodecs require HTTPS.`). 
 TLS-terminating Ingress, route to the `http` port — the browser's origin is what counts.
 
 ```bash
-helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version 1.0.0 \
+helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version <version> \
   --set ingress.enabled=true \
   --set ingress.className=traefik \
   --set ingress.host=desktop.example.com \
@@ -23,8 +23,8 @@ helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version 1.0.0 \
 ## Image selection
 
 `image.tag` is empty by default and composed from `image.variant` and the chart's
-appVersion: variant `k8s` at appVersion `ls286-1.0.0` gives
-`ghcr.io/lonk42/dailytop:k8s-ls286-1.0.0`. A chart published from tag `1.1.0` therefore
+appVersion: variant `k8s` at appVersion `ls286-1.1.0` gives
+`ghcr.io/lonk42/dailytop:k8s-ls286-1.1.0`. A chart published from tag `1.1.0` therefore
 defaults to the images that same tag built. Set `image.tag` to pin something else.
 
 | `image.variant` | For |

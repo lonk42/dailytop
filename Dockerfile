@@ -27,7 +27,7 @@ FROM ${WEBTOP_BASE_IMAGE} AS base
 ARG BASE_PACKAGES="vim git tmux htop rsync net-tools firefox chromium sqlite sshfs \
 telnet spectacle unzip npm awscli2 dos2unix dejavu-fonts-all ripgrep figlet \
 kolourpaint ImageMagick strace gh jq yq bind-utils iputils wget helm kubectl \
-azure-cli opentofu kustomize rclone restic s3cmd"
+azure-cli opentofu kustomize rclone restic s3cmd yakuake"
 # Own switches because these need vendor repos, not Fedora's.
 ARG INSTALL_VSCODE=true
 ARG INSTALL_GCLOUD=true
@@ -326,7 +326,7 @@ RUN --security=insecure \
 # =============================================================================
 FROM desktop AS full
 
-ARG FULL_PACKAGES="yakuake sshpass irssi mutt"
+ARG FULL_PACKAGES="sshpass irssi mutt"
 ARG FULL_FLATPAKS=""
 ARG INSTALL_DIND=true
 ARG INSTALL_SSHD=true
@@ -441,7 +441,7 @@ RUN --security=insecure \
 FROM desktop AS k8s
 
 # libva-utils = vainfo; the rest are cluster debugging conveniences.
-ARG K8S_PACKAGES="libva-utils iproute mlocate"
+ARG K8S_PACKAGES="libva-utils iproute plocate"
 # Forces YouTube to VP9, which pre-Ampere cards decode in hardware. False on Ampere+.
 # docs/image-design.md#av1
 ARG FIREFOX_DISABLE_AV1=true
