@@ -104,6 +104,31 @@ Container environment: the chart's own defaults for the enabled features, with
 {{- end }}
 
 {{/*
+One probe. Takes (dict "root" $ "probe" .Values.probes.<name>); renders the handler the
+probe's method selects plus its timings.
+*/}}
+{{- define "dailytop.probe" -}}
+{{- $root := .root -}}
+{{- $p := .probe -}}
+{{- $method := $p.method | default $root.Values.probes.method -}}
+{{- if eq $method "session" }}
+exec:
+  command:
+    {{- toYaml $root.Values.probes.sessionCommand | nindent 4 }}
+{{- else if eq $method "tcp" }}
+tcpSocket:
+  port: http
+{{- else }}
+{{- fail (printf "probes method must be `session` or `tcp`, got %q" $method) }}
+{{- end }}
+periodSeconds: {{ $p.periodSeconds }}
+failureThreshold: {{ $p.failureThreshold }}
+{{- with $p.timeoutSeconds }}
+timeoutSeconds: {{ . }}
+{{- end }}
+{{- end }}
+
+{{/*
 Pod securityContext: the preset the enabled features imply, with podSecurityContext
 merged over it.
 */}}

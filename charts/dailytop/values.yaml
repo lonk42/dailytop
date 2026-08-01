@@ -48,9 +48,10 @@ extraEnv: []
 
 envFrom: []
 
-# Password for the in-desktop `abc` and `root` accounts, applied at container start by
-# the image's 01-set-passwords.sh hook. Present in `full` and `k8s`; the `coder` and
-# `base` images have no such hook and ignore it.
+# Password for the in-desktop `abc` and `root` accounts. Only the `full` image applies
+# it, through its 01-set-passwords.sh hook; every other variant sets the variable and
+# ignores it. `k8s` carries the KDE lock screen without that hook, so unlocking a `k8s`
+# desktop needs an equivalent script of your own under `initScripts`.
 auth:
   # Secret holding the password. The chart creates no Secret of its own -- make it with
   #   kubectl create secret generic dailytop-credentials --from-literal=USER_PASSWORD=...
@@ -176,24 +177,44 @@ resources:
     # No CPU limit by default. Software H.264 encode of a desktop stream is bursty and
     # CPU-bound; a limit throttles the stream rather than the workload.
 
-# TCP probes rather than HTTP: the desktop sits behind whatever authentication the
-# Ingress adds, and a redirect or a 401 is a healthy backend.
 probes:
+  # What the probes treat as "up".
+  #
+  #   session  execs sessionCommand. nginx answers on the http port whether or not the
+  #            desktop behind it is alive, so a port check reports a healthy pod through
+  #            a session that is crash-looping and serving nothing.
+  #   tcp      connects to the http port. Cheaper, and all a non-selkies image can do.
+  #
+  # Overridable per probe with `method:` under any of the three below.
+  method: session
+
+  # Both processes are required for a usable stream: selkies serves it, kwin produces
+  # the frames. Matched on process NAME -- `pgrep -f` matches the probe's own shell in
+  # its own command line and would succeed no matter what is running.
+  sessionCommand:
+    - /bin/sh
+    - -c
+    - pgrep -x selkies >/dev/null && pgrep -x kwin_wayland >/dev/null
+
   startup:
     enabled: true
     # 5 minutes. A cold /config is slow the first time; the image builds a KDE profile.
     periodSeconds: 5
     failureThreshold: 60
+    timeoutSeconds: 5
   readiness:
     enabled: true
     periodSeconds: 10
     failureThreshold: 3
+    timeoutSeconds: 5
   liveness:
     # Restarting a desktop pod destroys the running session, so this is deliberately
-    # slack: three and a half minutes of a dead port before it acts.
+    # slack: three and a half minutes of a dead session before it acts. s6 restarts a
+    # dead service on its own, and this only fires when that has stopped working.
     enabled: true
     periodSeconds: 30
     failureThreshold: 7
+    timeoutSeconds: 5
 
 serviceAccount:
   create: true

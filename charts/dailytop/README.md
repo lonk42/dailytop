@@ -80,6 +80,56 @@ platform assign a uid. The image must have been built with `--build-arg
 UNPRIVILEGED=true` — the plain image dies at preinit under this security context. See
 [docs/unprivileged.md](../../docs/unprivileged.md).
 
+## Probes
+
+The probes check the session, not the port. nginx answers on 3000 whether or not the
+desktop behind it is alive, so a port check reports a healthy pod through a session that
+is crash-looping and streaming nothing — a rollout then completes and the endpoint takes
+traffic with a black screen behind it.
+
+`probes.sessionCommand` requires both processes a stream needs: selkies serves it, kwin
+produces the frames.
+
+```yaml
+probes:
+  sessionCommand:
+    - /bin/sh
+    - -c
+    - pgrep -x selkies >/dev/null && pgrep -x kwin_wayland >/dev/null
+```
+
+Matched on process **name**. `pgrep -f 'bin/selkies'` matches the probe's own `sh -c`
+command line and succeeds no matter what is running — verified, not theoretical.
+
+Liveness runs the same check with slack thresholds (3.5 minutes). s6 restarts a dead
+service by itself; this only fires once that has stopped working, and it turns a silent
+hang into a visible restart.
+
+Set `probes.method: tcp` for the old port check, globally or on one probe:
+
+```yaml
+probes:
+  liveness:
+    method: tcp
+```
+
+## Account passwords
+
+`auth.existingSecret` puts `USER_PASSWORD` in the environment, but only the `full` image
+acts on it — the hook that applies it is built in that stage. The `k8s` image inherits
+the KDE lock screen from `desktop` without inheriting the hook, so a `k8s` desktop with
+`LOCK_ON_STARTUP=true` and nothing else locks itself with no way in. Either keep
+`LOCK_ON_STARTUP=false`, or supply the script yourself:
+
+```yaml
+initScripts:
+  01-set-passwords.sh: |
+    #!/bin/bash
+    [ -n "${USER_PASSWORD}" ] || exit 0
+    echo "abc:${USER_PASSWORD}"  | chpasswd
+    echo "root:${USER_PASSWORD}" | chpasswd
+```
+
 ## Init scripts
 
 `initScripts` is a map of filename to script content, dropped into
@@ -108,7 +158,7 @@ replace it and hide every hook baked into the image.
 | `env` | see values.yaml | Wins over every default the feature flags add |
 | `extraEnv` | `[]` | Raw entries, for `valueFrom` |
 | `envFrom` | `[]` | |
-| `auth.existingSecret` | `""` | Secret holding the in-desktop account password |
+| `auth.existingSecret` | `""` | Secret holding the in-desktop account password — applied by the `full` image only, see below |
 | `auth.secretKey` | `USER_PASSWORD` | |
 | `caCerts.enabled` | `false` | Trust extra root CAs from a Secret |
 | `caCerts.existingSecret` | `""` | Required when enabled |
@@ -150,7 +200,9 @@ replace it and hide every hook baked into the image.
 | `persistence.shm.sizeLimit` | `2Gi` | |
 | `extraVolumes` / `extraVolumeMounts` | `[]` | |
 | `resources` | 500m/4Gi requested, 16Gi limit | No CPU limit — see values.yaml |
-| `probes.startup.*` | enabled, 5 min budget | TCP on the http port |
+| `probes.method` | `session` | `session` execs `sessionCommand`; `tcp` connects to the http port |
+| `probes.sessionCommand` | `pgrep` for selkies + kwin | See below |
+| `probes.startup.*` | enabled, 5 min budget | Per-probe `method:` overrides the global |
 | `probes.readiness.*` | enabled | |
 | `probes.liveness.*` | enabled, slack thresholds | A restart destroys the session |
 | `serviceAccount.create` / `.name` / `.annotations` | `true` / `""` / `{}` | |

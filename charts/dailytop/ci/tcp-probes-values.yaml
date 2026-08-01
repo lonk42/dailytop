@@ -1,0 +1,7 @@
+# Port-based probes, for an image whose session is not selkies + kwin.
+probes:
+  method: tcp
+
+# A per-probe override must win over the global method.
+image:
+  variant: coder

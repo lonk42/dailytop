@@ -68,24 +68,15 @@ spec:
               protocol: TCP
           {{- if .Values.probes.startup.enabled }}
           startupProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
-            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            {{- include "dailytop.probe" (dict "root" $ "probe" .Values.probes.startup) | trim | nindent 12 }}
           {{- end }}
           {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            {{- include "dailytop.probe" (dict "root" $ "probe" .Values.probes.readiness) | trim | nindent 12 }}
           {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            {{- include "dailytop.probe" (dict "root" $ "probe" .Values.probes.liveness) | trim | nindent 12 }}
           {{- end }}
           resources:
             {{- $resources := deepCopy .Values.resources }}
