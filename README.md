@@ -5,6 +5,10 @@ A containerised KDE Plasma desktop in your browser, built on
 [selkies](https://github.com/selkies-project/selkies)). Supports several variants
 packaged for Kubernetes, [Coder](https://coder.com) workspaces and Docker.
 
+![KDE Plasma in a browser tab, with the selkies dashboard open](docs/images/screenshot.png)
+
+The `k8s` variant, with the selkies dashboard open on its video settings.
+
 ## What it adds to webtop
 
 dailytop is a much fatter base including support for a larger variety of desktop tools.
