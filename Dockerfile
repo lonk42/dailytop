@@ -267,6 +267,59 @@ else
 fi
 EOF
 
+# nvidia-container-toolkit does not inject the EGL-on-X11 platform libraries, and they are
+# driver-locked so they cannot be baked in. Written only when a mount supplies them.
+# docs/image-design.md#firefox-egl-on-x11-then-vaapi
+RUN cat > /custom-cont-init.d/08-nvidia-egl-x11.sh <<'EOF'
+#!/bin/bash
+command -v nvidia-smi >/dev/null 2>&1 || exit 0
+n=0
+for p in xcb xlib; do
+  cfg="/usr/share/egl/egl_external_platform.d/20_nvidia_${p}.json"
+  lib=$(find /usr/lib /usr/lib64 -name "libnvidia-egl-${p}.so.1" 2>/dev/null | head -1)
+  if [ -z "${lib}" ]; then
+    rm -f "${cfg}" 2>/dev/null
+    continue
+  fi
+  want=$(printf '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_path" : "libnvidia-egl-%s.so.1"\n    }\n}' "${p}")
+  # A deployment may also bind-mount the config read-only; that is correct, not an error.
+  if [ "$(cat "${cfg}" 2>/dev/null)" = "${want}" ]; then
+    n=$((n+1))
+  elif printf '%s\n' "${want}" > "${cfg}" 2>/dev/null; then
+    n=$((n+1))
+  else
+    echo "[custom-init] WARNING: cannot write ${cfg}; EGL-on-X11 will not load" >&2
+  fi
+done
+if [ "${n}" -eq 0 ]; then
+  echo "[custom-init] no EGL-on-X11 platform libraries; Firefox will use GLX and decode video on the CPU" >&2
+  exit 0
+fi
+ldconfig
+echo "[custom-init] wrote ${n} nvidia EGL-on-X11 platform config(s)"
+EOF
+
+# VAAPI needs EGL, so these prefs are worth nothing without 08- above having found the
+# libraries. FIREFOX_DISABLE_AV1 forces VP9 for cards with no AV1 decode block.
+# docs/image-design.md#firefox-egl-on-x11-then-vaapi
+RUN cat > /custom-cont-init.d/09-firefox-vaapi.sh <<'EOF'
+#!/bin/bash
+PREFS=/usr/lib64/firefox/browser/defaults/preferences/vaapi.js
+command -v nvidia-smi >/dev/null 2>&1 || { rm -f "${PREFS}"; exit 0; }
+[ -d /usr/lib64/firefox ] || exit 0
+mkdir -p "$(dirname "${PREFS}")"
+{
+  echo 'pref("media.ffmpeg.vaapi.enabled", true);'
+  echo 'pref("media.hardware-video-decoding.force-enabled", true);'
+  echo 'pref("media.rdd-ffmpeg.enabled", true);'
+  [ "${FIREFOX_DISABLE_AV1:-false}" = "true" ] && echo 'pref("media.av1.enabled", false);'
+} > "${PREFS}"
+echo "[custom-init] wrote Firefox VAAPI prefs (AV1 disabled: ${FIREFOX_DISABLE_AV1:-false})"
+# The decoder runs in the RDD process, whose sandbox blocks /dev/dri outright.
+[ -n "${MOZ_DISABLE_RDD_SANDBOX}" ] || \
+  echo "[custom-init] WARNING: MOZ_DISABLE_RDD_SANDBOX unset; the RDD process cannot open /dev/dri and decode stays on the CPU" >&2
+EOF
+
 # Locking at session start has no ordinary path here -- no plasma-session, no logind --
 # so this helper drives the ScreenSaver DBus service from inside the session bus. It is
 # backgrounded from startwm's own bash -c block below, which is the only place
@@ -291,8 +344,11 @@ EOF
 
 # Activate or discard the scripts above, per the ARGs. Dropping --no-lockscreen is what
 # makes kwin register the ScreenSaver service at all.
-RUN chmod 0755 /custom-cont-init.d/02-nvidia-proc-unmount.sh && \
+RUN chmod 0755 /custom-cont-init.d/02-nvidia-proc-unmount.sh \
+		/custom-cont-init.d/08-nvidia-egl-x11.sh /custom-cont-init.d/09-firefox-vaapi.sh && \
 	bash -n /custom-cont-init.d/02-nvidia-proc-unmount.sh && \
+	bash -n /custom-cont-init.d/08-nvidia-egl-x11.sh && \
+	bash -n /custom-cont-init.d/09-firefox-vaapi.sh && \
 	if [ "${ENABLE_NVIDIA_FLATPAK_GL}" = "true" ]; then \
 		chmod 0755 /custom-cont-init.d/03-nvidia-flatpak-gl.sh && \
 		bash -n /custom-cont-init.d/03-nvidia-flatpak-gl.sh; \
@@ -319,6 +375,9 @@ RUN --security=insecure \
 		done && \
 		find /var/lib/flatpak/repo/tmp -mindepth 1 -delete; \
 	fi
+
+# /config is a runtime volume; drop root-owned build droppings a fresh volume inherits.
+RUN find /config -mindepth 1 -maxdepth 1 ! -user abc -exec rm -rf {} +
 
 
 # =============================================================================
@@ -348,6 +407,7 @@ RUN if [ "${INSTALL_DIND}" = "true" ]; then \
 		dnf install -y docker-buildx runc && dnf clean all && \
 		command -v runc >/dev/null && \
 		ln -sf /usr/bin/tini-static /usr/local/bin/docker-init && \
+		mkdir -p /etc/docker && \
 		echo '{"features": {"containerd-snapshotter": false}}' > /etc/docker/daemon.json; \
 	else \
 		rm -f /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker && \
@@ -432,41 +492,26 @@ RUN --security=insecure \
 		find /var/lib/flatpak/repo/tmp -mindepth 1 -delete; \
 	fi
 
+# /config is a runtime volume; drop root-owned build droppings a fresh volume inherits.
+RUN find /config -mindepth 1 -maxdepth 1 ! -user abc -exec rm -rf {} +
+
 
 # =============================================================================
-#  k8s -- NVIDIA VAAPI / EGL wiring for a Kubernetes deployment
+#  k8s -- NVIDIA node-layout fixes for a Kubernetes deployment
 # =============================================================================
-# Omits the full image's toolchain, DinD and sshd; adds only the GPU/display fixes a
-# clustered NVIDIA deployment needs. Deployed by the chart in charts/dailytop/.
+# Omits the full image's toolchain, DinD and sshd. The Firefox VAAPI wiring is in
+# `desktop`; this stage adds what a cluster needs on top -- the injected driver lands in
+# the node's libdir, not Fedora's. Deployed by the chart in charts/dailytop/.
 FROM desktop AS k8s
 
 # libva-utils = vainfo; the rest are cluster debugging conveniences.
 ARG K8S_PACKAGES="libva-utils iproute plocate"
-# Forces YouTube to VP9, which pre-Ampere cards decode in hardware. False on Ampere+.
-# docs/image-design.md#av1
-ARG FIREFOX_DISABLE_AV1=true
 
 RUN if [ -n "${K8S_PACKAGES}" ]; then dnf install -y ${K8S_PACKAGES}; fi && dnf clean all
 
 # No docker toolchain here, so the service must go or dockerd restart-loops.
 RUN rm -f /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker && \
 	test ! -e /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker
-
-# glvnd configs for NVIDIA's EGL-on-X11 platform libraries. The libraries themselves are
-# driver-locked and NOT injected by the GPU operator -- mount them from the node. Without
-# them Firefox falls back to software WebRender, which disables all hardware video decode.
-# docs/image-design.md#firefox-egl-on-x11-then-vaapi
-RUN printf '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_path" : "libnvidia-egl-xcb.so.1"\n    }\n}\n'  > /usr/share/egl/egl_external_platform.d/20_nvidia_xcb.json && \
-	printf '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_path" : "libnvidia-egl-xlib.so.1"\n    }\n}\n' > /usr/share/egl/egl_external_platform.d/20_nvidia_xlib.json
-
-# Default prefs, user-overridable.
-RUN mkdir -p /usr/lib64/firefox/browser/defaults/preferences && \
-	{ \
-		echo 'pref("media.ffmpeg.vaapi.enabled", true);'; \
-		echo 'pref("media.hardware-video-decoding.force-enabled", true);'; \
-		echo 'pref("media.rdd-ffmpeg.enabled", true);'; \
-		if [ "${FIREFOX_DISABLE_AV1}" = "true" ]; then echo 'pref("media.av1.enabled", false);'; fi; \
-	} > /usr/lib64/firefox/browser/defaults/preferences/vaapi.js
 
 # The runtime injects the GBM backend into the node's libdir; Fedora's libgbm only
 # searches /usr/lib64/gbm, so without a link there kwin falls back to software rendering.
@@ -504,11 +549,14 @@ RUN chmod 0755 /custom-cont-init.d/06-nvidia-gbm-link.sh /custom-cont-init.d/07-
 	bash -n /custom-cont-init.d/06-nvidia-gbm-link.sh && \
 	bash -n /custom-cont-init.d/07-nvidia-glcore-links.sh
 
-# Baked so it travels with the prefs above. MOZ_DISABLE_RDD_SANDBOX weakens the sandbox
+# Baked because this stage is NVIDIA-only. MOZ_DISABLE_RDD_SANDBOX weakens the sandbox
 # around Firefox's media decoder -- required for VAAPI there, and a real trade-off.
+# FIREFOX_DISABLE_AV1 forces YouTube to VP9, which pre-Ampere cards decode in hardware.
+# Override it to false on Ampere+. docs/image-design.md#av1
 ENV LIBVA_DRIVER_NAME=nvidia \
 	NVD_BACKEND=direct \
-	MOZ_DISABLE_RDD_SANDBOX=1
+	MOZ_DISABLE_RDD_SANDBOX=1 \
+	FIREFOX_DISABLE_AV1=true
 
 
 # =============================================================================
@@ -795,6 +843,9 @@ RUN if [ "${UNPRIVILEGED}" = "true" ]; then \
 	else \
 		rm -f /usr/local/bin/s6-setuidgid-unpriv /custom-cont-init.d/05-unpriv-passwd.sh; \
 	fi
+
+# /config is a runtime volume; drop root-owned build droppings a fresh volume inherits.
+RUN find /config -mindepth 1 -maxdepth 1 ! -user abc -exec rm -rf {} +
 
 # Inert when running as root: preinit only consults it on the branch where it cannot
 # chown /run itself, which is fatal otherwise. A k8s emptyDir on /run is mode 2777.

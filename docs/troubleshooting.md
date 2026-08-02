@@ -452,6 +452,72 @@ NVENC is separate, so re-test it fresh rather than assuming it leaks too.
 
 ---
 
+## No icons anywhere, and every flatpak fails with `Permission denied`
+
+On a **fresh named volume** only. The menu has entries but none of them draw an icon, the
+panel is bare, `flatpak run` exits `error: Permission denied`, and the log carries
+`dconf will not work properly`.
+
+Build-time tools run as root with `HOME=/config`, so `flatpak`, `terraform` and `vim`
+leave root-owned `.cache`, `.config`, `.local`, `.terraform.d` and `.viminfo` in the
+image. Docker seeds an empty named volume from the image, droppings and all, and `abc`
+cannot write its own cache. Plasma silently renders no icon at all when it cannot create
+`$XDG_CACHE_HOME/*.kcache`; `ksycoca` is written earlier and survives, which is why the
+menu keeps its entries.
+
+```bash
+docker exec <c> find /config -mindepth 1 -maxdepth 1 ! -user abc -printf '%u %p\n'
+docker exec <c> ls /config/.cache/*.kcache        # absent = this fault
+```
+
+Each stage now strips them at the end of its build, so the fix is to rebuild. To recover a
+volume already seeded from an older image, `chown -R abc:abc /config` and restart the
+container — the permissions alone are not enough, because the running Plasma built its
+cache objects at session start and does not retry.
+
+A **bind** mount is immune: it masks the image's `/config` entirely and seeds nothing.
+That is why this never appears on a deployment that binds a host directory.
+
+---
+
+## Video caps the stream around 20fps, but the desktop is smooth
+
+The desktop feels fine and the selkies FPS counter reaches 60, until a video plays — then
+it settles near 20 and stays there. The instinct is to look at the encoder. It is not the
+encoder.
+
+Selkies encodes what changes. If the stream reports 20fps, the screen is *changing* 20
+times a second, and the browser is what cannot paint faster. Confirm before touching
+anything else: during playback, selkies and kwin sit in single-digit CPU, NVENC
+utilisation is low, and the **Firefox parent process** burns well over 100%.
+
+The check that settles it — the RDD process is where Firefox decodes video:
+
+```bash
+main=$(pgrep -o -f /usr/lib64/firefox/firefox)
+for p in $main $(pgrep -P $main); do
+  printf '%-18s dri=%s\n' "$(cat /proc/$p/comm)" "$(ls -l /proc/$p/fd | grep -c /dev/dri)"
+done
+nvidia-smi --query-gpu=utilization.decoder --format=csv,noheader   # 0% while playing
+```
+
+`RDD Process dri=0` during playback means every frame is decoded on the CPU. Three things
+have to be true together, and any one missing produces exactly this symptom:
+
+1. The EGL-on-X11 platform libraries are mounted, so Firefox gets hardware WebRender —
+   [image-design.md](image-design.md#firefox-egl-on-x11-then-vaapi). Software WebRender
+   disables hardware decode wholesale, whatever the prefs say.
+2. `MOZ_DISABLE_RDD_SANDBOX=1`, or the RDD process cannot open `/dev/dri` at all.
+3. `LIBVA_DRIVER_NAME=nvidia` and `NVD_BACKEND=direct`. Verify the driver itself with
+   `vainfo`: a working setup prints `VA-API NVDEC driver [direct backend]` and lists the
+   profiles, and it is worth checking first because it clears the whole lower half of the
+   stack in one command.
+
+A passing `vainfo` alongside `RDD dri=0` narrows it to 1 or 2 — the driver works and
+Firefox is not reaching it.
+
+---
+
 ## Never restart selkies to fix the desktop
 
 In pixelflux/Wayland mode (`PIXELFLUX_WAYLAND=true`), **selkies is the parent of the

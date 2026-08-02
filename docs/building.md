@@ -81,7 +81,9 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | Arg | Default | Notes |
 |---|---|---|
 | `K8S_PACKAGES` | `libva-utils iproute plocate` | `vainfo` plus cluster debugging conveniences |
-| `FIREFOX_DISABLE_AV1` | `true` | [Set `false` on Ampere or newer](image-design.md#av1) |
+
+`FIREFOX_DISABLE_AV1` is a runtime environment variable, not a build arg — this stage
+defaults it to `true`. [Set `false` on Ampere or newer](image-design.md#av1).
 
 ### coder
 

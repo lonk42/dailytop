@@ -20,12 +20,17 @@ services:
     # REQUIRED. Chromium/Electron apps crash on Docker's 64 MB default.
     shm_size: "2gb"
 
-    # Unmasks /proc for flatpak's bwrap sandbox. SYS_ADMIN does not help; `privileged`
-    # works but grants far more.
+    # Unmasks /proc for flatpak's bwrap sandbox.
     # docs/troubleshooting.md#what-privileged-actually-buys-unmasked-proc
     security_opt:
       - seccomp:unconfined
       - systempaths=unconfined
+
+    # Required by DinD: upstream's svc-docker starts dockerd only when
+    # /dev/cpu_dma_latency exists, and parks on `sleep infinity` when it does not.
+    # Set INSTALL_DIND=false at build time to drop both.
+    # docs/image-design.md#docker-in-docker-and-explicit-runc
+    privileged: true
 
     environment:
       - PUID=${PUID:-1000}
@@ -51,11 +56,27 @@ services:
       # pixelflux picks its encoder backend from DRI_NODE's driver; zero-copy when it
       # equals DRINODE.
       # - DRI_NODE=/dev/dri/renderD128
+      # Firefox hardware video decode. MOZ_DISABLE_RDD_SANDBOX weakens the sandbox around
+      # the media decoder; without it the RDD process cannot open /dev/dri at all.
+      # docs/image-design.md#firefox-egl-on-x11-then-vaapi
+      # - LIBVA_DRIVER_NAME=nvidia
+      # - NVD_BACKEND=direct
+      # - MOZ_DISABLE_RDD_SANDBOX=1
+      # Forces YouTube to VP9. Leave false on Ampere+, which decodes AV1 in hardware.
+      # - FIREFOX_DISABLE_AV1=false
 
     volumes:
       - dailytop-config:/config
       # Extra root CAs; an empty mount is fine. See certs/README.md.
       - ./certs:/certs:ro
+      # NVIDIA 3/3 -- the EGL-on-X11 platform libraries, which the container toolkit does
+      # not inject and which are driver-locked, so they cannot be baked in. Without them
+      # Firefox uses GLX, VAAPI is unavailable, and video decode stays on the CPU.
+      # Mount the soname, never the versioned file: the version moves with the driver, and
+      # docker silently creates a directory in place of a missing bind source.
+      # Set NVIDIA_EGL_LIB_DIR in .env for a distro that is not /usr/lib.
+      # - ${NVIDIA_EGL_LIB_DIR:-/usr/lib}/libnvidia-egl-xcb.so.1:/usr/lib64/libnvidia-egl-xcb.so.1:ro
+      # - ${NVIDIA_EGL_LIB_DIR:-/usr/lib}/libnvidia-egl-xlib.so.1:/usr/lib64/libnvidia-egl-xlib.so.1:ro
 
     ports:
       - "3000:3000"   # HTTP  (the client refuses to start on a non-secure context)

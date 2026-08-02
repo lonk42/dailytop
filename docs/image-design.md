@@ -52,6 +52,8 @@ s6-rc-db -c <db> all-dependencies init-custom-files | grep -x init-selkies-confi
 | `05-unpriv-passwd.sh` | coder, `UNPRIVILEGED=true` only | [A passwd entry for an arbitrary uid](unprivileged.md#what-the-image-changes) |
 | `06-nvidia-gbm-link.sh` | k8s | [The GBM backend, in Fedora's libdir](#nvidia-libraries-land-in-the-wrong-libdir) |
 | `07-nvidia-glcore-links.sh` | k8s | [The GL and EGL cores, likewise](#nvidia-libraries-land-in-the-wrong-libdir) |
+| `08-nvidia-egl-x11.sh` | desktop | [glvnd configs for the mounted EGL-on-X11 libraries](#firefox-egl-on-x11-then-vaapi) |
+| `09-firefox-vaapi.sh` | desktop | [Firefox hardware decode prefs](#firefox-egl-on-x11-then-vaapi) |
 
 ## base
 
@@ -178,6 +180,40 @@ flatpak list --runtime | grep nvidia
 The extension is deliberately not installed at build time: flatpak cannot resolve the
 ref without knowing the host driver, and there is no GPU in the builder.
 
+### Firefox: EGL on X11, then VAAPI
+
+Firefox runs under XWayland here — set `MOZ_ENABLE_WAYLAND=0` in your deployment,
+because Firefox's native-Wayland path freezes in an unconditional
+`wp_color_manager_v1` roundtrip against this kwin. Firefox also removed the GLX backend,
+so on X11 it is EGL or software.
+
+NVIDIA's EGL-on-X11 support lives in two external platform libraries
+(`libnvidia-egl-xcb.so.1`, `libnvidia-egl-xlib.so.1`) that neither the GPU operator nor
+`nvidia-container-toolkit` injects — `nvidia-container-cli list` carries
+`libnvidia-eglcore` and `libEGL_nvidia` but not these. Without them glvnd falls through
+to Mesa, which cannot drive the NVIDIA card (`failed to create dri2 screen`), and Firefox
+lands on software WebRender — which in turn sets gfxVars disabling *all* hardware video
+decode (`Hw codec disabled by gfxVars`).
+
+The libraries are driver-version-locked, so they cannot be baked in: mount them from the
+host or node. **Mount the soname, never the versioned file.** The version moves with the
+driver, and a missing bind source is a directory docker creates for you, so a driver
+update turns hardware decode off with no error anywhere.
+
+`08-nvidia-egl-x11.sh` writes the glvnd configs at startup, and only for the platforms
+whose library it actually finds — so the configs cannot outlive the mount, and the day
+the toolkit starts injecting these libraries the mounts can simply be deleted.
+`09-firefox-vaapi.sh` writes the Firefox prefs on the same condition.
+
+`MOZ_DISABLE_RDD_SANDBOX=1` is required for VAAPI inside Firefox's RDD sandbox. It
+weakens the sandbox around the media decoder process — acceptable for a single-user
+desktop behind authentication. It has to be container environment, so `09-` can only warn
+when it is missing.
+
+The visible symptom of any of this being absent is a streamed desktop that is smooth
+until a video plays and then caps out around 20fps: Firefox cannot paint frames faster,
+so selkies has nothing more to encode.
+
 ### The KDE lock screen
 
 `startwm_wayland.sh` launches kwin with `--no-lockscreen`. On Plasma 6 Wayland it is
@@ -218,6 +254,19 @@ With `INSTALL_DIND=false` the service is **removed** instead. That removal is ma
 for any image without the docker toolchain, which is why `k8s` and `coder` both do it
 too.
 
+The container also has to run `privileged`. Upstream's `svc-docker` probes for
+`/dev/cpu_dma_latency`, a device node that only a privileged container has, and execs
+`sleep infinity` when it is missing. `s6-svstat` then reports the service `up`, nothing
+reaches the log, and the symptom is a docker CLI with no daemon behind it:
+
+```bash
+pgrep -a dockerd; ls -l /dev/cpu_dma_latency   # both empty = the probe failed
+```
+
+`docker-compose.yaml` sets it. A deployment that cannot grant it wants
+`INSTALL_DIND=false` instead — the service parks either way, but removal is the
+honest form of it.
+
 Drop `runc` and its assertion once the base ships an OCI runtime again:
 
 ```bash
@@ -247,27 +296,6 @@ lint rule — it is a boolean switch, and no password is ever a build arg.
 
 ## k8s
 
-### Firefox: EGL on X11, then VAAPI
-
-Firefox runs under XWayland here — set `MOZ_ENABLE_WAYLAND=0` in your deployment,
-because Firefox's native-Wayland path freezes in an unconditional
-`wp_color_manager_v1` roundtrip against this kwin. Firefox also removed the GLX backend,
-so on X11 it is EGL or software.
-
-NVIDIA's EGL-on-X11 support lives in two external platform libraries
-(`libnvidia-egl-xcb.so.1`, `libnvidia-egl-xlib.so.1`) that the GPU operator does **not**
-inject into containers. Without them glvnd falls through to Mesa, which cannot drive the
-NVIDIA card (`failed to create dri2 screen`), and Firefox lands on software WebRender —
-which in turn sets gfxVars disabling *all* hardware video decode (`Hw codec disabled by
-gfxVars`).
-
-The libraries are driver-version-locked, so mount them from the node with a `hostPath`;
-the static glvnd configs pointing at them are baked into the image.
-
-`MOZ_DISABLE_RDD_SANDBOX=1` is required for VAAPI inside Firefox's RDD sandbox. It
-weakens the sandbox around the media decoder process — acceptable for a single-user
-desktop behind authentication.
-
 ### NVIDIA libraries land in the wrong libdir
 
 The container runtime injects the userspace driver into the *node's* library layout. On a
@@ -296,6 +324,10 @@ YouTube serves AV1 to any browser claiming support, and software dav1d decode is
 this variant exists to avoid. NVIDIA AV1 hardware decode only arrived with
 Ampere, so on Pascal and Turing cards disabling AV1 makes YouTube fall back to VP9,
 which those cards decode in hardware. Set `FIREFOX_DISABLE_AV1=false` on Ampere or newer.
+
+It is a runtime environment variable read by `09-firefox-vaapi.sh`, not a build arg, so
+one image serves both card generations. `k8s` defaults it to true; everywhere else it
+defaults to false.
 
 ## coder
 

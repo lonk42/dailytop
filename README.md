@@ -19,9 +19,11 @@ dailytop is a much fatter base including support for a larger variety of desktop
 - **An unprivileged variant** that runs as an arbitrary non-root uid with no
   capabilities under Kubernetes' `restricted` PodSecurity, with no policy exception.
   [Detail](docs/unprivileged.md)
-- **GPU acceleration for Wayland.** NVIDIA runtime wiring, and the glvnd EGL-on-X11
-  configs that hardware video decode in Firefox needs but the GPU operator does not
-  provide. [Detail](docs/image-design.md#firefox-egl-on-x11-then-vaapi)
+- **GPU acceleration for Wayland**, and hardware video decode in Firefox. The EGL-on-X11
+  platform libraries that decode depends on are driver-locked and injected by neither the
+  GPU operator nor `nvidia-container-toolkit`, so the deployment mounts them and a startup
+  hook configures glvnd for whichever ones it finds.
+  [Detail](docs/image-design.md#firefox-egl-on-x11-then-vaapi)
 - **Flatpak support**, with Flathub configured, apps where the KDE menu can find them,
   and bwrap functioning under the NVIDIA container runtime.
 - **A KDE lock screen**, optionally engaged at session start and unlocked with an
@@ -38,26 +40,30 @@ dailytop is a much fatter base including support for a larger variety of desktop
 | Target | What it is | Notable contents |
 |---|---|---|
 | `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu, yakuake; no flatpaks |
-| `desktop` | `base` + a full desktop session. | flatpak + Flathub, Spotify, claude-desktop |
+| `desktop` | `base` + a full desktop session. | flatpak + Flathub, Spotify, claude-desktop, Firefox hardware decode |
 | `full` | `desktop` + a workstation toolchain. | sshd, DinD, runtime password setup |
-| `k8s` | `desktop` + NVIDIA wiring for a cluster. | VAAPI/NVDEC for Firefox, glvnd EGL-on-X11 configs, no sshd |
+| `k8s` | `desktop` + node-layout fixes for a cluster. | `vainfo`, the injected-driver symlink hooks, no sshd |
 | `coder` | A [Coder](https://coder.com) workspace. | `base` + the Coder agent as an s6 service; no flatpaks, no HTTP basic auth |
 
 | Variant | GPU support | Docker in Docker | Lockscreen | Unprivileged |
 |---|:---:|:---:|:---:|:---:|
 | `base` | ❌ | ❌ \* | ❌ | ❌ |
 | `desktop` | ✅ | ❌ \* | ✅ | ❌ |
-| `full` | ✅ | ✅ | ✅ | ❌ |
-| `k8s` | ✅ \*\* | ❌ | ✅ | ❌ |
-| `coder` | ❌ | ❌ | ❌ | ✅ \*\*\* |
+| `full` | ✅ | ✅ \*\* | ✅ | ❌ |
+| `k8s` | ✅ \*\*\* | ❌ | ✅ | ❌ |
+| `coder` | ❌ | ❌ | ❌ | ✅ \*\*\*\* |
 
 - \* `base` and `desktop` still carry the upstream `svc-docker` service with no OCI
   runtime behind it, so dockerd restart-loops and [stacks a tmpfs on
   `/tmp`](docs/troubleshooting.md#svc-docker-restart-loop-stacks-tmpfs-on-tmp). `full`
   installs `runc`; `k8s` and `coder` remove the service.
-- \*\* `k8s` adds VAAPI/NVDEC and the glvnd EGL-on-X11 configs on top of `desktop`'s
-  NVIDIA flatpak GL hook.
-- \*\*\* Opt-in, via `--build-arg UNPRIVILEGED=true` — published as the `coder-unpriv`
+- \*\* DinD requires `privileged: true`. Upstream's `svc-docker` starts dockerd only when
+  `/dev/cpu_dma_latency` exists and otherwise parks on `sleep infinity`, reporting healthy
+  the whole time. Build with `INSTALL_DIND=false` if you cannot grant it.
+  [Detail](docs/image-design.md#docker-in-docker-and-explicit-runc)
+- \*\*\* `k8s` adds the symlink hooks that find the injected driver in the node's libdir,
+  on top of `desktop`'s NVIDIA hooks.
+- \*\*\*\* Opt-in, via `--build-arg UNPRIVILEGED=true` — published as the `coder-unpriv`
   variant.
 
 ```
@@ -124,7 +130,7 @@ and the workspace never reports healthy, with the desktop up the whole time.
 
 ### NVIDIA
 
-Uncomment the two blocks marked **NVIDIA** in
+Uncomment the three blocks marked **NVIDIA** in
 [`docker-compose.yaml`](docker-compose.yaml) and set
 `SELKIES_ENCODER=x264enc,x264enc-striped,jpeg` in `.env`. The file runs software-rendered
 by default.
@@ -133,6 +139,16 @@ Exposing the device nodes is not enough — only the NVIDIA container runtime in
 userspace driver, and without it you get software rendering and no NVENC with no obvious
 error.
 [Detail](docs/troubleshooting.md#nvidia-exposing-devices-is-not-injecting-the-driver)
+
+The third block covers hardware **video** decode, which is separate from rendering and
+fails separately: it mounts the two EGL-on-X11 platform libraries the container runtime
+does not inject, and sets `MOZ_DISABLE_RDD_SANDBOX=1` so Firefox's decoder process can
+open `/dev/dri` at all. Set `NVIDIA_EGL_LIB_DIR` in `.env` if the host keeps them
+somewhere other than `/usr/lib`. Mount the soname, never the versioned filename — the
+version moves with the driver, and docker answers a missing bind source by creating a
+directory, so an update turns decode off silently. The symptom is a desktop that is
+smooth until a video plays and then caps around 20fps.
+[Detail](docs/troubleshooting.md#video-caps-the-stream-around-20fps-but-the-desktop-is-smooth)
 
 ### CA certificates
 
@@ -153,6 +169,8 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
 | `PRIVATE_REGISTRY` | *(empty)* | Registry `host[:port]` to trust from the inner DinD daemon |
 | `SSHD_CONFIG` | `/defaults/sshd_config` | Use your own sshd config |
 | `SELKIES_ENCODER` | per variant | Ordered fallback list — [read this first](docs/troubleshooting.md#the-encoder-model-read-this-first) |
+| `FIREFOX_DISABLE_AV1` | `false`, `true` on `k8s` | Forces YouTube to VP9, for cards with no AV1 decode block |
+| `MOZ_DISABLE_RDD_SANDBOX` | *(unset)* | Required for Firefox hardware decode; weakens its media-decoder sandbox |
 
 ### Deploying
 
