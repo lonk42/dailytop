@@ -121,6 +121,28 @@ Note that `abc` is uid **911** in the base and `LSIO_NON_ROOT_USER` skips the `u
 that would move it to `PUID`. Nothing should depend on the running uid matching `abc`;
 the gid-0 group permissions are what grant access.
 
+### Naming the runtime user
+
+`UNPRIV_USERNAME` sets the name of the entry the hook writes; it defaults to
+`abc-unpriv`. The name is cosmetic — it is what `whoami`, the shell prompt and `ps` show
+— but the Coder agent's `USER` follows it, so the two agree.
+
+It applies only where the running uid has no `passwd` entry. At the baked 911 the hook
+exits early and the session is plain `abc`.
+
+Two values are rejected, both with a warning to the init log:
+
+- Anything outside `^[a-z_][a-z0-9_-]*$`. The name lands in a colon-delimited field, so
+  a value carrying a `:` writes a `passwd` line of its own choosing. The hook falls back
+  to `abc-unpriv`.
+- A name already present in `/etc/passwd`, `abc` among them. `getpwnam()` returns the
+  first match while `getpwuid()` returns this one, so the same identity resolves to two
+  different uids depending on which direction it is looked up. Here the hook adds no
+  entry at all, leaving the `getpwuid()` failures it exists to prevent.
+
+The entry carries `x` in the password field and no `/etc/shadow` line, so it resolves for
+`getpwuid()` and no password authenticates it.
+
 ### The trade-off
 
 `chmod g=u` on `/etc/passwd` makes it writable by anything running as gid 0, which is

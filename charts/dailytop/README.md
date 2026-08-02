@@ -175,6 +175,7 @@ replace it and hide every hook baked into the image.
 | `gpu.eglPlatformLibs.containerPath` | `/usr/lib64` | |
 | `unprivileged.enabled` | `false` | Needs an image built with `UNPRIVILEGED=true` |
 | `unprivileged.runAsUser` | `9999` | `null` lets the platform assign one |
+| `unprivileged.username` | `""` | Name for that uid's `/etc/passwd` entry; empty keeps `abc-unpriv` |
 | `flatpak.enabled` | `false` | Unmasked `/proc` and unconfined seccomp for bwrap |
 | `podSecurityContext` | `{}` | Merged over the preset, and wins |
 | `containerSecurityContext` | `{}` | Likewise |

@@ -236,6 +236,21 @@ the stream can turn it off at runtime.
 > no password produces an unopenable desktop. See [account
 > passwords](#account-passwords).
 
+### Account passwords
+
+Not baked into the image. They are applied at container start from `$USER_PASSWORD`,
+which keeps the password out of git and out of the image layers while still giving the
+lock screen an unlockable account. The heredoc delimiter is quoted so `${USER_PASSWORD}`
+stays literal in the script and expands at container start.
+
+`INSTALL_ACCOUNT_HOOK` is named to avoid tripping BuildKit's `SecretsUsedInArgOrEnv`
+lint rule — it is a boolean switch, and no password is ever a build arg.
+
+The hook lives in `desktop`, the same stage as the lock screen it serves, so `full` and
+`k8s` both carry it and `coder` — which branches off `base` — has neither. `chpasswd`
+needs root, so the hook logs a warning and leaves the accounts alone in an unprivileged
+container; there is no lock screen in the variant built that way.
+
 ## full
 
 ### Docker-in-Docker and explicit runc
@@ -283,16 +298,6 @@ password/PAM authentication needs root. Put your public key in
 `/config/.ssh/authorized_keys`. Host keys are generated into `/config` on first start,
 so they survive container replacement. Override the config with `SSHD_CONFIG` at
 runtime.
-
-### Account passwords
-
-Not baked into the image. They are applied at container start from `$USER_PASSWORD`,
-which keeps the password out of git and out of the image layers while still giving the
-lock screen an unlockable account. The heredoc delimiter is quoted so `${USER_PASSWORD}`
-stays literal in the script and expands at container start.
-
-`INSTALL_ACCOUNT_HOOK` is named to avoid tripping BuildKit's `SecretsUsedInArgOrEnv`
-lint rule — it is a boolean switch, and no password is ever a build arg.
 
 ## k8s
 

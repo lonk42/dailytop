@@ -209,6 +209,9 @@ ARG INSTALL_CLAUDE_DESKTOP=true
 ARG FLATPAKS="com.spotify.Client"
 # Restore KDE's screen locker and lock once at session start.
 ARG ENABLE_LOCK_SCREEN=true
+# Sets abc/root passwords at start from $USER_PASSWORD; the lock screen needs one to open.
+# Named to avoid BuildKit's SecretsUsedInArgOrEnv lint -- no password is ever a build arg.
+ARG INSTALL_ACCOUNT_HOOK=true
 # Startup hook matching the extension to the host driver; needs the NVIDIA runtime.
 ARG ENABLE_NVIDIA_FLATPAK_GL=true
 
@@ -320,6 +323,32 @@ echo "[custom-init] wrote Firefox VAAPI prefs (AV1 disabled: ${FIREFOX_DISABLE_A
   echo "[custom-init] WARNING: MOZ_DISABLE_RDD_SANDBOX unset; the RDD process cannot open /dev/dri and decode stays on the CPU" >&2
 EOF
 
+# Passwords are applied at container start, never baked into a layer. The heredoc
+# delimiter is QUOTED so ${USER_PASSWORD} stays literal and expands at runtime.
+RUN cat > /custom-cont-init.d/01-set-passwords.sh <<'EOF'
+#!/bin/bash
+# Runs 01- so the accounts are usable for the rest of init.
+if [ -z "${USER_PASSWORD}" ]; then
+  echo "[custom-init] USER_PASSWORD unset; leaving account passwords unchanged"
+  exit 0
+fi
+# chpasswd needs root, which an unprivileged container does not have.
+if [ "$(id -u)" != "0" ]; then
+  echo "[custom-init] WARNING: not root; USER_PASSWORD cannot be applied" >&2
+  exit 0
+fi
+echo "abc:${USER_PASSWORD}"  | chpasswd
+echo "root:${USER_PASSWORD}" | chpasswd
+echo "[custom-init] set abc/root passwords from USER_PASSWORD"
+EOF
+
+RUN if [ "${INSTALL_ACCOUNT_HOOK}" = "true" ]; then \
+		chmod 0755 /custom-cont-init.d/01-set-passwords.sh && \
+		bash -n /custom-cont-init.d/01-set-passwords.sh; \
+	else \
+		rm -f /custom-cont-init.d/01-set-passwords.sh; \
+	fi
+
 # Locking at session start has no ordinary path here -- no plasma-session, no logind --
 # so this helper drives the ScreenSaver DBus service from inside the session bus. It is
 # backgrounded from startwm's own bash -c block below, which is the only place
@@ -393,9 +422,6 @@ ARG SSHD_PORT=2222
 # Runtime: a registry host[:port] served by a private CA, wired into the inner DinD's
 # certs.d by 00-ca-certs.sh. See certs/README.md.
 ENV PRIVATE_REGISTRY=""
-# Sets abc/root passwords at start from $USER_PASSWORD. Required with the lock screen.
-# Named to avoid BuildKit's SecretsUsedInArgOrEnv lint -- no password is ever a build arg.
-ARG INSTALL_ACCOUNT_HOOK=true
 
 RUN if [ -n "${FULL_PACKAGES}" ]; then dnf install -y ${FULL_PACKAGES}; fi && dnf clean all
 
@@ -462,27 +488,6 @@ RUN if [ "${INSTALL_SSHD}" = "true" ]; then \
 		touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-sshd; \
 	fi && \
 	rm -f /defaults/svc-sshd-run
-
-# Passwords are applied at container start, never baked into a layer. The heredoc
-# delimiter is QUOTED so ${USER_PASSWORD} stays literal and expands at runtime.
-RUN cat > /custom-cont-init.d/01-set-passwords.sh <<'EOF'
-#!/bin/bash
-# Runs 01- so the accounts are usable for the rest of init.
-if [ -n "${USER_PASSWORD}" ]; then
-  echo "abc:${USER_PASSWORD}"  | chpasswd
-  echo "root:${USER_PASSWORD}" | chpasswd
-  echo "[custom-init] set abc/root passwords from USER_PASSWORD"
-else
-  echo "[custom-init] USER_PASSWORD unset; leaving account passwords unchanged"
-fi
-EOF
-
-RUN if [ "${INSTALL_ACCOUNT_HOOK}" = "true" ]; then \
-		chmod 0755 /custom-cont-init.d/01-set-passwords.sh && \
-		bash -n /custom-cont-init.d/01-set-passwords.sh; \
-	else \
-		rm -f /custom-cont-init.d/01-set-passwords.sh; \
-	fi
 
 RUN --security=insecure \
 	if [ -n "${FULL_FLATPAKS}" ]; then \
@@ -608,10 +613,17 @@ printf '%s' "${CODER_AGENT_INIT_SCRIPT_B64}" | base64 -d > "$INIT" \
 [ -s "$INIT" ] || park "decoded init script is empty"
 chmod 0755 "$INIT"
 
-echo "[svc-coder-agent] starting Coder agent as abc (HOME=/config)"
+# Mirrors the s6-setuidgid shim: as root the agent becomes abc, otherwise it is already us.
+if [ "$(id -u)" = "0" ]; then
+  agent_user=abc
+else
+  agent_user="$(id -un 2>/dev/null || id -u)"
+fi
+
+echo "[svc-coder-agent] starting Coder agent as ${agent_user} (HOME=/config)"
 exec s6-setuidgid abc env \
   HOME=/config \
-  USER=abc \
+  USER="${agent_user}" \
   SHELL=/bin/bash \
   XDG_RUNTIME_DIR=/config/.XDG \
   DISPLAY=:0 \
@@ -810,14 +822,27 @@ EOF
 
 # An arbitrary uid has no passwd entry, and getpwuid() failures are obscure when they
 # surface (plasmashell, dbus, ssh). Needs /etc/passwd group-writable, hence the path list.
+# UNPRIV_USERNAME names the entry. docs/unprivileged.md#naming-the-runtime-user
 RUN cat > /custom-cont-init.d/05-unpriv-passwd.sh <<'EOF'
 #!/bin/bash
 uid=$(id -u)
 if getent passwd "${uid}" >/dev/null 2>&1; then
   exit 0
 fi
-if printf 'abc-unpriv:x:%s:%s:container user:/config:/bin/bash\n' "${uid}" "$(id -g)" >> /etc/passwd 2>/dev/null; then
-  echo "[custom-init] added /etc/passwd entry for uid ${uid}"
+name="${UNPRIV_USERNAME:-abc-unpriv}"
+# The name lands in a colon-delimited field, so anything else forges a passwd line.
+if ! [[ "${name}" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+  echo "[custom-init] WARNING: UNPRIV_USERNAME '${name}' is not a valid user name; using abc-unpriv" >&2
+  name=abc-unpriv
+fi
+# A duplicate name resolves to the FIRST entry, leaving getpwnam and getpwuid disagreeing.
+if getent passwd "${name}" >/dev/null 2>&1; then
+  echo "[custom-init] WARNING: user name '${name}' is taken; uid ${uid} left without an entry" >&2
+  exit 0
+fi
+# x with no /etc/shadow line: resolvable by getpwuid, and no password can authenticate it.
+if printf '%s:x:%s:%s:container user:/config:/bin/bash\n' "${name}" "${uid}" "$(id -g)" >> /etc/passwd 2>/dev/null; then
+  echo "[custom-init] added /etc/passwd entry ${name} for uid ${uid}"
 else
   echo "[custom-init] WARNING: uid ${uid} has no passwd entry and /etc/passwd is not writable" >&2
 fi

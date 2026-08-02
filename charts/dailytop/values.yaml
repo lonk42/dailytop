@@ -36,8 +36,8 @@ env:
   # encoders), or `x264enc,x264enc-striped,jpeg` when `gpu.enabled` puts the hardware
   # path first. Uncomment to pin it yourself.
   # SELKIES_ENCODER: x264enc-striped,jpeg
-  # The KDE lock screen needs a password to open it. Leave locking off unless
-  # `auth.existingSecret` supplies one. docs/image-design.md#the-kde-lock-screen
+  # The KDE lock screen needs a password to open it, so the chart refuses to render this
+  # as "true" without `auth.existingSecret`. docs/image-design.md#the-kde-lock-screen
   LOCK_ON_STARTUP: "false"
 
 # Raw env entries, appended after `env`. Use for valueFrom.
@@ -111,6 +111,10 @@ unprivileged:
   # Any uid that does not collide with an entry in the image's /etc/passwd. Leave null
   # to let the platform assign one (OpenShift does).
   runAsUser: 9999
+  # Name for that uid's /etc/passwd entry; empty keeps the image default, `abc-unpriv`.
+  # Must match [a-z_][a-z0-9_-]* and not already exist in the image's /etc/passwd.
+  # docs/unprivileged.md#naming-the-runtime-user
+  username: ""
 
 # flatpak's bwrap sandbox needs an unmasked /proc, which needs an unconfined seccomp
 # profile and the ProcMountType feature gate. Only the `desktop`, `full` and `k8s`

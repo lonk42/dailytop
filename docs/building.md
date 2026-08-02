@@ -66,6 +66,7 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | `INSTALL_CLAUDE_DESKTOP` | `true` | Third-party repo |
 | `FLATPAKS` | `com.spotify.Client` | Empty installs none but keeps flatpak usable at runtime |
 | `ENABLE_LOCK_SCREEN` | `true` | Needs an account password to be openable — [why](image-design.md#the-kde-lock-screen) |
+| `INSTALL_ACCOUNT_HOOK` | `true` | [Sets `abc`/`root` passwords at start from `$USER_PASSWORD`](image-design.md#account-passwords) |
 | `ENABLE_NVIDIA_FLATPAK_GL` | `true` | [Startup hook that matches the host driver](image-design.md#nvidia-flatpak-gl-extension) |
 
 ### full
@@ -77,7 +78,6 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | `INSTALL_DIND` | `true` | `false` **removes** the base's `svc-docker`, which is mandatory without the toolchain — [why](image-design.md#docker-in-docker-and-explicit-runc) |
 | `INSTALL_SSHD` | `true` | [Unprivileged sshd, key auth only](image-design.md#sshd) |
 | `SSHD_PORT` | `2222` | |
-| `INSTALL_ACCOUNT_HOOK` | `true` | [Sets `abc`/`root` passwords at start from `$USER_PASSWORD`](image-design.md#account-passwords) |
 
 ### k8s
 

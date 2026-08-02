@@ -85,8 +85,18 @@ Container environment: the chart's own defaults for the enabled features, with
 {{- $_ := set $defaults "LSIO_NON_ROOT_USER" "true" -}}
 {{- $_ := set $defaults "PULSE_RUNTIME_PATH" "/run/pulse" -}}
 {{- $_ := set $defaults "NO_GAMEPAD" "1" -}}
+{{- if .Values.unprivileged.username -}}
+{{- $_ := set $defaults "UNPRIV_USERNAME" .Values.unprivileged.username -}}
+{{- end -}}
 {{- end -}}
 {{- $env := merge (deepCopy (default dict .Values.env)) $defaults }}
+{{/* Absent means the image default, which is on. A lock screen with no password set is
+     unopenable, and recovering means deleting the pod. */}}
+{{- $lock := "true" }}
+{{- if hasKey $env "LOCK_ON_STARTUP" }}{{- $lock = get $env "LOCK_ON_STARTUP" | toString }}{{- end }}
+{{- if and (eq $lock "true") (not .Values.auth.existingSecret) }}
+{{- fail "LOCK_ON_STARTUP is true but auth.existingSecret is unset: nothing would set a password, and the lock screen could not be opened" }}
+{{- end }}
 {{- range $k, $v := $env }}
 - name: {{ $k }}
   value: {{ $v | quote }}
