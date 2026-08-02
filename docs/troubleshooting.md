@@ -18,6 +18,7 @@ Logs live **only** in the container's stdout — `docker logs <container>` or
 - [Stuck modifier key](#stuck-modifier-key)
 - [The X display number changes between base versions](#the-x-display-number-changes-between-base-versions)
 - [Upstream patches carried here, and when to delete them](#upstream-patches-carried-here-and-when-to-delete-them)
+- [Builds inside the desktop copy every layer](#builds-inside-the-desktop-copy-every-layer)
 - [Build environment gotchas](#build-environment-gotchas)
 - [Container hangs at `mod-init` on a tunnelled host (MTU)](#container-hangs-at-mod-init-on-a-tunnelled-host-mtu)
 
@@ -684,12 +685,55 @@ display number.
 
 ---
 
-## Build environment gotchas
+## Builds inside the desktop copy every layer
 
-**Don't build this image inside a container whose Docker uses `fuse-overlayfs`.**
-BuildKit then falls back to the *native snapshotter*, which full-copies the multi-GB
-base rootfs on every layer and ENOSPCs regardless of free disk. A host with `overlay2`
-builds it with CoW diffs.
+Building the image from inside the `full` desktop takes hours and dies with `no space
+left on device` while `df` still reports tens of gigabytes free. Each layer costs a full
+copy of the parent rootfs rather than a diff.
+
+The cause is the **filesystem under the nested Docker's data root**, and it propagates
+through two hops:
+
+1. The desktop container's own rootfs is `overlayfs` on any host using `overlay2` or the
+   containerd snapshotter.
+2. `/var/lib/docker` is part of that rootfs — the writable layer — unless something is
+   mounted over it. `overlay2` cannot use an `overlayfs` directory as its `upperdir`, so
+   the nested `dockerd` falls back to `fuse-overlayfs`.
+3. A buildx `docker-container` builder keeps its state in a **named volume**, which lives
+   under `/var/lib/docker/volumes/` — back on the container's `overlayfs`.
+4. BuildKit probes that directory, cannot create an overlay mount there, and selects the
+   **native snapshotter**, which has no copy-on-write. Every layer becomes a physical
+   copy of the parent snapshot.
+
+Note the second hop is the one that matters. It is not that overlayfs cannot stack on
+fuse-overlayfs — it is that BuildKit's state directory sits on the desktop container's
+overlay rootfs, and overlay-`upperdir`-on-overlay is what the kernel refuses.
+
+**Diagnose:**
+
+```bash
+docker info | grep 'Storage Driver'          # fuse-overlayfs => hop 2 already lost
+docker buildx create --name probe --driver docker-container
+docker buildx inspect --bootstrap probe
+docker logs buildx_buildkit_probe0 2>&1 | grep 'auto snapshotter'
+```
+
+`using native` is the failure; `using overlayfs` is the fix. The same answer is on disk
+as `runc-native` vs `runc-overlayfs` in the builder's state volume.
+
+**Fix:** mount a directory from a real filesystem over `/var/lib/docker`, so the nested
+data root is no longer on the container's overlay rootfs. Both hops clear at once — the
+nested `dockerd` gets `overlay2`, and named volumes (so every builder's state) land on
+that filesystem and get the overlayfs snapshotter. The commented mount in
+`docker-compose.yaml` does this. Setting `data-root` in the nested
+`/etc/docker/daemon.json` to a path on an already-mounted volume works equally well and
+needs no change to the deployment.
+
+Size it for the work: a full copy of the image plus BuildKit's cache, not just the image.
+
+---
+
+## Build environment gotchas
 
 **A validation command in a `RUN` can leave state in the layer.** `nginx -t` is the one
 that bit here: a config *test* creates `/run/nginx.pid` and empty nginx logs, root-owned,

@@ -34,9 +34,12 @@ The `# syntax` directive must stay on the `labs` channel: `RUN --security=insecu
 labs-only feature and the stable frontend fails to parse it with `unknown flag:
 security`.
 
-> **Don't build inside a container whose Docker uses `fuse-overlayfs`.** BuildKit falls
-> back to the native snapshotter, which full-copies the multi-GB base rootfs per layer
-> and runs out of space regardless of free disk. Build on a host with `overlay2`.
+> **Check the snapshotter before building inside a container.** If the nested Docker's
+> data root is on the container's own overlay rootfs, BuildKit selects the native
+> snapshotter, which full-copies the multi-GB base rootfs per layer and runs out of space
+> regardless of free disk. Mounting a real filesystem over `/var/lib/docker` fixes it —
+> see [builds inside the desktop copy every
+> layer](troubleshooting.md#builds-inside-the-desktop-copy-every-layer).
 
 More in [build environment gotchas](troubleshooting.md#build-environment-gotchas).
 

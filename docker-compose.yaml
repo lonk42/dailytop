@@ -77,6 +77,12 @@ services:
       # Set NVIDIA_EGL_LIB_DIR in .env for a distro that is not /usr/lib.
       # - ${NVIDIA_EGL_LIB_DIR:-/usr/lib}/libnvidia-egl-xcb.so.1:/usr/lib64/libnvidia-egl-xcb.so.1:ro
       # - ${NVIDIA_EGL_LIB_DIR:-/usr/lib}/libnvidia-egl-xlib.so.1:/usr/lib64/libnvidia-egl-xlib.so.1:ro
+      # Uncomment to build images inside the desktop. On an overlayfs-backed host the
+      # inner dockerd falls back to fuse-overlayfs and BuildKit to its copying native
+      # snapshotter; the source must be on a real filesystem, so set DOCKER_DATA_ROOT if
+      # this checkout is not on one.
+      # docs/troubleshooting.md#builds-inside-the-desktop-copy-every-layer
+      # - ${DOCKER_DATA_ROOT:-./docker}:/var/lib/docker
 
     ports:
       - "3000:3000"   # HTTP  (the client refuses to start on a non-secure context)

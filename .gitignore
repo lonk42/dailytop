@@ -9,6 +9,9 @@ certs/*.pem
 # The desktop's /config home when bind-mounted here (large; caches, tokens, history)
 config/
 
+# The nested dockerd's data root when mounted here. See docker-compose.yaml.
+docker/
+
 # Editor cruft
 *.swp
 *.swo
