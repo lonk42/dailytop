@@ -116,7 +116,7 @@ PRIVATE_REGISTRY="$(cenv PRIVATE_REGISTRY '')"
 ANCHORS=/etc/pki/ca-trust/source/anchors
 PREFIX=dailytop-
 
-shopt -s nullglob
+shopt -s nullglob globstar
 
 # Revoke whatever a previous start installed.
 stale=("${ANCHORS}/${PREFIX}"*)
@@ -124,7 +124,8 @@ if [ ${#stale[@]} -gt 0 ]; then
   rm -f "${stale[@]}"
 fi
 
-certs=("${CERT_DIR}"/*.crt "${CERT_DIR}"/*.pem)
+# ** recurses but skips dot-prefixed names, so a volume's ..data is not double-counted.
+certs=("${CERT_DIR}"/**/*.crt "${CERT_DIR}"/**/*.pem)
 
 if [ ${#certs[@]} -eq 0 ]; then
   if [ -d "${CERT_DIR}" ]; then
@@ -138,8 +139,10 @@ if [ ${#certs[@]} -eq 0 ]; then
   exit 0
 fi
 
+# Anchor names carry the relative path, so two subdirectories may share a basename.
 for c in "${certs[@]}"; do
-  install -m 0644 "${c}" "${ANCHORS}/${PREFIX}$(basename "${c}")" || \
+  rel="${c#"${CERT_DIR}"/}"
+  install -m 0644 "${c}" "${ANCHORS}/${PREFIX}${rel//\//-}" || \
     echo "[custom-init] WARNING: could not install ${c}" >&2
 done
 

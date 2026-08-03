@@ -33,6 +33,11 @@ config where they can be rotated, sealed, or managed as a Kubernetes Secret.
 
 ## Behaviour
 
+- **Subdirectories are searched.** The whole tree under the mount is scanned, so a
+  projected `ConfigMap` or `Secret` that lands its keys in nested paths still works.
+  Anchor names carry the relative path, so `a/ca.crt` and `b/ca.crt` are both installed
+  rather than one overwriting the other. Names beginning with a dot are skipped, which
+  is what stops a Kubernetes volume's `..data` symlink trusting everything twice.
 - **Trust is rebuilt from the mount on every start, not accumulated.** Anchors installed
   by a previous start are removed first, so deleting a certificate from the mount and
   restarting revokes it. This matters because `/etc` is image state and survives
