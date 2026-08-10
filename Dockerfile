@@ -196,6 +196,78 @@ RUN SELKIES_PY="$(ls /lsiopy/lib/python3.*/site-packages/selkies/selkies.py)" &&
 	[ "$(grep -c 'to_thread(GPUtil.getGPUs)' "$SELKIES_PY")" = "3" ] && \
 	/lsiopy/bin/python3 -m py_compile "$SELKIES_PY"
 
+# The base discards pulseaudio's output, so a pulseaudio that will not start is invisible
+# -- and the sink setup below depends on it. --log-level=0 keeps this to errors only.
+# docs/troubleshooting.md#no-audio-the-output-sink-was-never-created
+RUN grep -q -- '--exit-idle-time=-1 > /dev/null 2>&1' /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
+	sed -i 's|--exit-idle-time=-1 > /dev/null 2>&1|--exit-idle-time=-1|' \
+		/etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
+	! grep -q '/dev/null' /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
+	bash -n /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run
+
+# selkies captures audio from a null sink named `output`, created once per container by
+# svc-selkies. Upstream's block gets two things wrong and loses all audio when it does:
+# it treats pulseaudio's pidfile as readiness (written before the socket accepts), and it
+# stamps its once-only lock unconditionally -- so a lost race latches "no audio" for the
+# life of the container, silently. Replaced wholesale.
+# docs/troubleshooting.md#no-audio-the-output-sink-was-never-created
+RUN cat > /usr/local/bin/selkies-audio-setup <<'EOF'
+#!/usr/bin/with-contenv bash
+# Create the null sinks selkies captures from. Idempotent; safe to re-run.
+LOCK=/dev/shm/audio.lock
+RUNTIME="${PULSE_RUNTIME_PATH:-/defaults}"
+
+[ -f "${LOCK}" ] && exit 0
+
+# Readiness is the server answering, not a pidfile existing.
+ready=false
+for i in $(seq 1 120); do
+  if s6-setuidgid abc pactl info >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  sleep .5
+done
+
+if [ "${ready}" != true ]; then
+  echo "[audio-setup] pulseaudio not answering on ${RUNTIME} after 60s; no audio" >&2
+  exit 0
+fi
+
+for sink in output input; do
+  if s6-setuidgid abc pactl list short sinks 2>/dev/null | cut -f2 | grep -qx "${sink}"; then
+    continue
+  fi
+  s6-setuidgid abc pactl load-module module-null-sink \
+    sink_name="${sink}" \
+    sink_properties=device.description="${sink}" >/dev/null 2>&1 || \
+    echo "[audio-setup] failed to create null sink '${sink}'" >&2
+done
+
+# selkies records output.monitor. Only latch the lock once it actually exists, so a
+# failure here is retried on the next start instead of being frozen in.
+if s6-setuidgid abc pactl list short sources 2>/dev/null | cut -f2 | grep -qx 'output.monitor'; then
+  s6-setuidgid abc pactl set-default-sink output >/dev/null 2>&1
+  touch "${LOCK}"
+  echo "[audio-setup] null sinks ready; capture source is output.monitor"
+else
+  echo "[audio-setup] output.monitor missing after setup; audio capture will fail" >&2
+fi
+
+exit 0
+EOF
+RUN chmod 0755 /usr/local/bin/selkies-audio-setup && \
+	bash -n /usr/local/bin/selkies-audio-setup && \
+	SELKIES_RUN=/etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	grep -q '^# Default sink setup$' "$SELKIES_RUN" && \
+	grep -q 'until \[ -f /defaults/pid \]; do' "$SELKIES_RUN" && \
+	grep -q 'touch /dev/shm/audio.lock' "$SELKIES_RUN" && \
+	sed -i '/^# Default sink setup$/,/^fi$/c\/usr/local/bin/selkies-audio-setup' "$SELKIES_RUN" && \
+	! grep -q 'audio.lock' "$SELKIES_RUN" && \
+	! grep -q '/defaults/pid' "$SELKIES_RUN" && \
+	grep -q '^/usr/local/bin/selkies-audio-setup$' "$SELKIES_RUN" && \
+	bash -n "$SELKIES_RUN"
+
 
 # =============================================================================
 #  desktop -- lock screen, flatpak machinery, flatpak apps
@@ -712,16 +784,6 @@ RUN chmod 0755 /usr/local/bin/code && \
 		! grep -q '^Exec=/usr/share/code/code' "$f" || exit 1; \
 	done
 
-# svc-selkies waits forever on pulseaudio's pidfile, at a path hardcoded to match the
-# base's baked PULSE_RUNTIME_PATH=/defaults. Honour the variable, and bound the wait --
-# an unreachable pidfile costs the desktop, not just audio. docs/unprivileged.md#pulseaudio
-RUN grep -q 'until \[ -f /defaults/pid \]; do' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
-	sed -i 's|until \[ -f /defaults/pid \]; do|for i in $(seq 1 120); do [ -f "${PULSE_RUNTIME_PATH:-/defaults}/pid" ] \&\& break; [ "$i" = 120 ] \&\& echo "[svc-selkies] no pulseaudio pidfile after 60s; continuing without audio setup" >\&2|' \
-		/etc/s6-overlay/s6-rc.d/svc-selkies/run && \
-	grep -q 'PULSE_RUNTIME_PATH:-/defaults' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
-	grep -q 'no pulseaudio pidfile after 60s' /etc/s6-overlay/s6-rc.d/svc-selkies/run && \
-	bash -n /etc/s6-overlay/s6-rc.d/svc-selkies/run
-
 # startwm creates Xwayland's socket directory with sudo, which a non-root container cannot
 # use -- so Xwayland gets no socket, and the session's MOZ_ENABLE_WAYLAND=0 sends Firefox
 # to an X display that never came up. /tmp is 1777. docs/troubleshooting.md#firefox-cannot-open-display-0
@@ -733,15 +795,6 @@ RUN grep -q '^sudo mkdir -p /tmp/.X11-unix$' /defaults/startwm_wayland.sh && \
 		/defaults/startwm_wayland.sh && \
 	! grep -q 'sudo.*X11-unix' /defaults/startwm_wayland.sh && \
 	bash -n /defaults/startwm_wayland.sh
-
-# The base discards pulseaudio's output, so a pulseaudio that will not start is invisible
-# -- and svc-selkies blocks on its pidfile. --log-level=0 keeps this to errors only.
-# docs/unprivileged.md#pulseaudio
-RUN grep -q -- '--exit-idle-time=-1 > /dev/null 2>&1' /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
-	sed -i 's|--exit-idle-time=-1 > /dev/null 2>&1|--exit-idle-time=-1|' \
-		/etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
-	! grep -q '/dev/null' /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run && \
-	bash -n /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run
 
 # Coder authenticates every request at its proxy, so the base's HTTP basic auth is a
 # second login for nothing, and the sed that enables it uncomments blindly. PASSWORD and

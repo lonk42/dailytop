@@ -106,7 +106,7 @@ anyway.
 | `chgrp -R 0` + `chmod -R g=u` on `UNPRIVILEGED_PATHS` | The init scripts write into `/etc/nginx`, `/usr/share/selkies` and friends at runtime |
 | `s6-setuidgid` shim | See above |
 | `05-unpriv-passwd.sh` hook | An arbitrary uid has no `passwd` entry, and `getpwuid()` failures surface obscurely in plasmashell, dbus and ssh |
-| `svc-selkies` honours `PULSE_RUNTIME_PATH` | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
+| sink setup replaced by `selkies-audio-setup` (no pidfile wait) | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
 | Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
 | nginx self-signs into `/run/ssl`, not `/config/ssl` | Applied unconditionally. A key left in the workspace volume by another uid is unreadable to this one, and nginx exits rather than start without it; see [image-design.md](image-design.md#tls-material-lives-in-run) |
 | `sudo` dropped from startwm's `/tmp/.X11-unix` setup | Applied unconditionally. `sudo` cannot elevate here, so Xwayland never gets a socket and every X11 app — Firefox first — fails with `cannot open display`; see [troubleshooting](troubleshooting.md#firefox-cannot-open-display-0) |
@@ -171,7 +171,7 @@ uid. The fix is to point it at a directory the container creates itself — anyt
 the `/run` emptyDir is then owned by whoever created it. Hence
 `PULSE_RUNTIME_PATH=/run/pulse`.
 
-That alone hangs the desktop a second way, because `svc-selkies` busy-waits on
+That alone hangs the desktop a second way, because upstream's `svc-selkies` busy-waits on
 pulseaudio's pidfile at a **hardcoded** `/defaults/pid`:
 
 ```bash
@@ -180,9 +180,14 @@ until [ -f /defaults/pid ]; do sleep .5; done
 
 With pulseaudio's runtime dir moved, that loop never exits, `svc-selkies` never reaches
 its `exec`, no Wayland socket is created, and `svc-de` waits forever — all while every
-service reports `up`. The image therefore carries a grep-guarded sed making the loop read
-`${PULSE_RUNTIME_PATH:-/defaults}/pid`, which is a strict generalisation: unset, the
-behaviour is byte-identical to upstream.
+service reports `up`.
+
+The image no longer patches that loop; it **replaces the whole sink-setup block** with
+`/usr/local/bin/selkies-audio-setup`, which waits on `pactl info` succeeding rather than
+on any pidfile, and bounds the wait at 60s. That removes the hardcoded path as a concern
+entirely — `pactl` resolves the socket from `PULSE_RUNTIME_PATH` itself — and fixes a
+second, unrelated bug in the same block. See
+[troubleshooting.md](troubleshooting.md#no-audio-the-output-sink-was-never-created).
 
 The tell is `svc-pulseaudio` cycling `down (exitcode 1)` with
 `Failed to create secure directory (/defaults)` in the log. On a base whose `svc-selkies`

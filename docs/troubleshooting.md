@@ -453,6 +453,95 @@ NVENC is separate, so re-test it fresh rather than assuming it leaks too.
 
 ---
 
+## No audio: the output sink was never created
+
+The desktop is otherwise perfect — video streams, apps run, the browser's audio toggle
+does nothing. `docker logs` shows one line repeating on every browser connect:
+
+```
+[pcmflux] Attempting to connect to PulseAudio device: output.monitor (latency 10ms)
+[pcmflux] SUCCESS: Connected to PulseAudio.
+[pcmflux] ERROR: PulseAudio source not found: 'output.monitor'
+ERROR:data_websocket:Failed to start pcmflux audio pipeline: audio capture failed to start
+```
+
+Note the two lines are not contradictory: pcmflux connects to the **server** fine, then
+fails to find the **source**. PulseAudio itself is healthy throughout, which is what
+sends people looking in the wrong place.
+
+selkies records the monitor of a null sink named `output`. Confirm it is missing:
+
+```bash
+pactl list short sinks     # expect: output, input.  Bug: a lone `auto_null`
+pactl list short sources   # expect: output.monitor
+pactl list short modules   # bug: nothing past the stock default.pa modules
+```
+
+**`auto_null` is the tell.** It is `module-always-sink`'s fallback, loaded only when no
+sink exists at all — so its presence proves the setup never ran, rather than having run
+and produced something wrong. Applications happily play into it and are never captured.
+
+### Cause
+
+Upstream's `svc-selkies/run` created the sinks like this:
+
+```bash
+if [ ! -f '/dev/shm/audio.lock' ]; then
+  until [ -f /defaults/pid ]; do sleep .5; done   # (1)
+  pactl load-module module-null-sink sink_name="output" ...
+  pactl load-module module-null-sink sink_name="input"  ...
+  touch /dev/shm/audio.lock                        # (2)
+fi
+```
+
+Two defects compound:
+
+1. **The pidfile is not readiness.** PulseAudio writes it early in startup, before
+   `module-native-protocol-unix` opens the socket. Lose that race and both `pactl` calls
+   fail.
+2. **The lock is stamped regardless of outcome.** Nothing checks the exit status, so a
+   lost race is latched for the life of the container, and the retry that would fix it
+   never happens.
+
+Because it is a race, it is intermittent: the same image can boot fine a hundred times
+and fail on the hundred-and-first. Nothing has to change for it to start happening.
+
+### The fix carried here
+
+`base` replaces the whole block with `/usr/local/bin/selkies-audio-setup`, which:
+
+- waits for **`pactl info` to succeed** — the server answering, not a file existing —
+  bounded at 60s, and resolves the socket from `PULSE_RUNTIME_PATH` rather than a
+  hardcoded path;
+- creates each sink only if absent, so it is idempotent;
+- **only touches the lock once `output.monitor` actually exists**, so a failure is
+  retried on the next start instead of being frozen in;
+- logs what it did either way.
+
+`base` also stops discarding pulseaudio's stderr (`--log-level=0` keeps it to errors),
+because the original block's failure was completely invisible in `docker logs`.
+
+### Recovering a running container without restarting it
+
+Restarting the container fixes it, but selkies parents the whole Wayland session, so that
+kills every open app — see [never restart selkies](#never-restart-selkies-to-fix-the-desktop).
+Create the sinks in place instead:
+
+```bash
+docker exec -u abc <container> env PULSE_RUNTIME_PATH=/defaults sh -c '
+  pactl load-module module-null-sink sink_name=output sink_properties=device.description=output
+  pactl load-module module-null-sink sink_name=input  sink_properties=device.description=input
+  pactl set-default-sink output
+  for i in $(pactl list short sink-inputs | cut -f1); do pactl move-sink-input $i output; done'
+```
+
+`auto_null` unloads itself as soon as a real sink appears, and already-running streams
+have to be moved across explicitly — they stay on the old sink otherwise. Audio resumes
+on the next browser reconnect, since capture only starts when a client sends
+`START_AUDIO`.
+
+---
+
 ## No icons anywhere, and every flatpak fails with `Permission denied`
 
 On a **fresh named volume** only. The menu has entries but none of them draw an icon, the
@@ -611,8 +700,8 @@ Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`
 
 ## Upstream patches carried here, and when to delete them
 
-The `Dockerfile` carries two patches that are **workarounds for upstream bugs, not
-choices**. Both are guarded so **the build fails once the bug is gone** — that failure
+The `Dockerfile` carries three patches that are **workarounds for upstream bugs, not
+choices**. All are guarded so **the build fails once the bug is gone** — that failure
 is the removal signal, not a regression. Do not "fix" a guard failure by loosening the
 guard.
 
@@ -623,6 +712,7 @@ category — deliberate behaviour changes, and they stay.)
 |---|-------|-------|-------------|
 | 1 | selkies monitor-task leak + blocking `nvidia-smi` | `base` | LinuxServer's `lsio` selkies branch merges upstream `main` |
 | 2 | explicit `runc` install | `full` | the base ships an OCI runtime again |
+| 3 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block waits on real readiness **and** checks `pactl` succeeded before stamping its lock |
 
 ### 1. selkies leaked monitor tasks
 
@@ -673,6 +763,30 @@ docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -
 If a runtime is present, drop `runc` from the install list and the `command -v runc`
 assertion. Harmless to keep either way, so this one is low-priority — unlike patch 1,
 which fails the build once upstream fixes it.
+
+### 3. audio sink setup
+
+Upstream's `svc-selkies/run` treats pulseaudio's pidfile as readiness and stamps its
+once-only lock whether or not `pactl` succeeded, so a lost race means no audio for the
+life of the container. Full analysis:
+[no audio](#no-audio-the-output-sink-was-never-created).
+
+The whole block is replaced with `/usr/local/bin/selkies-audio-setup`. Three guards hold
+it to the exact upstream shape — the `# Default sink setup` comment, the
+`until [ -f /defaults/pid ]` loop, and the `touch /dev/shm/audio.lock` — so any rework
+upstream fails the build.
+
+Check whether it can go:
+
+```bash
+docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -c \
+  'sed -n "/^# Default sink setup$/,/^fi$/p" /etc/s6-overlay/s6-rc.d/svc-selkies/run'
+```
+
+Delete the patch only if that block both waits on something that implies the socket is
+accepting (not the pidfile) **and** makes the `touch` conditional on the sinks existing.
+Fixing only the wait is not enough: the unconditional lock is what makes a failure
+permanent.
 
 ### Bumping the base pin
 
