@@ -16,6 +16,7 @@ Logs live **only** in the container's stdout — `docker logs <container>` or
 - ["Waiting for stream" — the VAAPI fd leak](#waiting-for-stream--the-vaapi-fd-leak)
 - [The desktop restarted and the stream never came back](#the-desktop-restarted-and-the-stream-never-came-back)
 - [Never restart selkies to fix the desktop](#never-restart-selkies-to-fix-the-desktop)
+- [The nested dockerd takes the container's network down](#the-nested-dockerd-takes-the-containers-network-down)
 - [Stuck modifier key](#stuck-modifier-key)
 - [The X display number changes between base versions](#the-x-display-number-changes-between-base-versions)
 - [Upstream patches carried here, and when to delete them](#upstream-patches-carried-here-and-when-to-delete-them)
@@ -694,6 +695,60 @@ desktop, killing every open app.
 process-child of selkies, so it looks safe to bounce selkies alone. **It is not** —
 doing so still takes Plasma down (observed twice). The process-tree independence is
 misleading; there is an s6-rc/capture coupling.
+
+---
+
+## The nested dockerd takes the container's network down
+
+Networking works for the first few seconds after start, then stops — around the time
+`svc-docker` brings the inner dockerd up. Only with `/var/lib/docker` on a **persistent**
+mount; without it the same image is fine, which makes the mount look like the culprit.
+
+It is not. The mount only makes the inner dockerd's networks survive a restart, and one
+of them overlaps the subnet the container itself is on.
+
+Docker allocates bridge subnets from `172.17.0.0/16`–`172.31.0.0/16`. The inner dockerd
+does that **inside this container's own network namespace**, where the container's own
+address already lives — and on any ordinary Docker host that address is in the same
+range. When dockerd restores a network whose subnet matches, its bridge takes the
+container's gateway address and a second route for that subnet appears. Traffic leaves
+by the wrong interface and the container goes dark.
+
+Confirm it — compare what the container is on against what the inner daemon has stored:
+
+```bash
+docker inspect <container> --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} gw={{.Gateway}}{{end}}'
+sudo strings /path/to/dind/network/files/local-kv.db | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | sort -u
+```
+
+An address in the second list that covers the address in the first is the fault. Note
+that the inner default bridge at `172.17.0.0/16` is a red herring unless the container
+happens to be on it; the one that bites is whichever network was created **later**,
+since that is the one that drifts into a subnet already in use.
+
+### The fix carried here
+
+`full` writes `default-address-pools` into the inner daemon's `/etc/docker/daemon.json`,
+moving its allocations to `DIND_ADDRESS_POOL` (`10.201.0.0/16` in `/24`s) — clear of the
+range outer Docker hands out. Both are build args.
+
+**Pools only apply to networks created afterwards.** A network already in the persistent
+data root keeps its subnet, so an existing deployment has to recreate it (`docker
+network rm` inside the DinD, or `docker compose up` for the project that owns it) or
+drop `network/files/local-kv.db` to have the daemon rebuild from scratch.
+
+Pinning the *outer* network somewhere outside `172.16/12` fixes it independently of the
+image, and is the quicker move on a running deployment:
+
+```yaml
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.99.42.0/24
+```
+
+Keep that subnet and `DIND_ADDRESS_POOL` apart, or the fix becomes the bug.
 
 ---
 

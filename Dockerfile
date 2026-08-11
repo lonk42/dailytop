@@ -527,6 +527,11 @@ ARG FULL_FLATPAKS=""
 ARG INSTALL_DIND=true
 ARG INSTALL_SSHD=true
 ARG SSHD_PORT=2222
+# The nested dockerd allocates bridge subnets inside this container's OWN netns, so its
+# stock 172.17-172.31 pool can land on the subnet the container itself sits on and shadow
+# its gateway. docs/troubleshooting.md#nested-dockerd-takes-the-containers-network-down
+ARG DIND_ADDRESS_POOL=10.201.0.0/16
+ARG DIND_ADDRESS_POOL_SIZE=24
 # Runtime: a registry host[:port] served by a private CA, wired into the inner DinD's
 # certs.d by 00-ca-certs.sh. See certs/README.md.
 ENV PRIVATE_REGISTRY=""
@@ -542,7 +547,9 @@ RUN if [ "${INSTALL_DIND}" = "true" ]; then \
 		command -v runc >/dev/null && \
 		ln -sf /usr/bin/tini-static /usr/local/bin/docker-init && \
 		mkdir -p /etc/docker && \
-		echo '{"features": {"containerd-snapshotter": false}}' > /etc/docker/daemon.json; \
+		printf '{"features": {"containerd-snapshotter": false}, "default-address-pools": [{"base": "%s", "size": %s}]}\n' \
+			"${DIND_ADDRESS_POOL}" "${DIND_ADDRESS_POOL_SIZE}" > /etc/docker/daemon.json && \
+		python3 -c 'import json,sys; d=json.load(open("/etc/docker/daemon.json")); sys.exit(0 if d["default-address-pools"][0]["base"] else 1)'; \
 	else \
 		rm -f /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker && \
 		test ! -e /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker; \
