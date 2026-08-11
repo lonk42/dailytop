@@ -1,0 +1,20 @@
+# Copy to build.args and edit. Read by build.sh; build.args is gitignored.
+#
+# One NAME=value per line, applied as --build-arg to every target. Values are literal:
+# no quoting, no shell expansion, and everything after the first `=` is the value.
+# Command-line args override anything set here.
+#
+# Only for values that are specific to your environment. Anything the reference image
+# should carry belongs in the Dockerfile's own defaults. See docs/building.md.
+
+# Flatpaks are the usual reason for this file: the app IDs you want are yours, not a
+# sensible default for everyone. FLATPAKS applies to desktop (so also full and k8s);
+# FULL_FLATPAKS applies to full alone. Keeping FLATPAKS empty and listing everything in
+# FULL_FLATPAKS puts the lot in one place and keeps k8s images free of them. Do not name
+# the same app in both -- the second install fails on an already-installed ref.
+# FLATPAKS=
+# FULL_FLATPAKS=org.signal.Signal com.spotify.Client
+
+# Skipping the heavier optional installs makes for a much faster local build.
+# INSTALL_GCLOUD=false
+# INSTALL_VSCODE=false

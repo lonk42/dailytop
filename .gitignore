@@ -1,6 +1,10 @@
 # Runtime secrets (USER_PASSWORD etc.) -- never commit
 .env
 
+# Build args for this machine; the example is tracked, the file is not.
+# See build.args.example.
+build.args
+
 # Extra CA certificates are environment-specific; the directory and its README are
 # tracked, the certs are not. See certs/README.md.
 certs/*.crt

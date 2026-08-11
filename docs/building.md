@@ -13,6 +13,7 @@ separate — see [releasing.md](releasing.md).
 | `TAG` | the target name | tag override |
 | `BUILDER` | `dailytop-builder` | buildx builder name |
 | `PLATFORM` | *(unset)* | `--platform` value |
+| `BUILD_ARGS_FILE` | `./build.args` | Local build args — see below |
 
 ```bash
 ./build.sh coder
@@ -22,6 +23,23 @@ separate — see [releasing.md](releasing.md).
 
 Every default reproduces the reference image, so no args are required. Package-list args
 are space-separated, and an empty value skips the step.
+
+## Local build args
+
+`build.sh` reads `./build.args` if it exists and passes each line through as a
+`--build-arg`. The file is gitignored; [`build.args.example`](../build.args.example) is
+the template. One `NAME=value` per line, `#` comments and blank lines skipped, values
+taken literally — no quoting and no shell expansion. Command-line args are appended
+after the file's, so they override it.
+
+```
+FLATPAKS=
+FULL_FLATPAKS=org.signal.Signal com.spotify.Client
+```
+
+This is where values that are specific to one machine go — private flatpak app IDs, an
+extra package, a local base pin. Anything the reference image should carry belongs in
+the Dockerfile's defaults instead.
 
 ## The flatpak entitlement
 
@@ -83,7 +101,7 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 
 | Arg | Default | Notes |
 |---|---|---|
-| `K8S_PACKAGES` | `libva-utils iproute plocate` | `vainfo` plus cluster debugging conveniences |
+| `K8S_PACKAGES` | `libva-utils plocate` | `vainfo` plus a cluster debugging convenience |
 
 `FIREFOX_DISABLE_AV1` is a runtime environment variable, not a build arg — this stage
 defaults it to `true`. [Set `false` on Ampere or newer](image-design.md#av1).

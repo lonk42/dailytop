@@ -24,8 +24,8 @@ ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-37cda392-ls286
 FROM ${WEBTOP_BASE_IMAGE} AS base
 
 # Packages from Fedora's own repos. Space-separated; empty skips the step.
-ARG BASE_PACKAGES="vim git tmux htop rsync net-tools firefox chromium sqlite sshfs \
-telnet spectacle unzip npm awscli2 dos2unix dejavu-fonts-all ripgrep figlet \
+ARG BASE_PACKAGES="vim git tmux htop rsync net-tools iproute firefox chromium sqlite \
+sshfs telnet spectacle unzip npm awscli2 dos2unix dejavu-fonts-all ripgrep figlet \
 kolourpaint ImageMagick strace gh jq yq bind-utils iputils wget helm kubectl \
 azure-cli opentofu kustomize rclone restic s3cmd yakuake"
 # Own switches because these need vendor repos, not Fedora's.
@@ -624,8 +624,8 @@ RUN find /config -mindepth 1 -maxdepth 1 ! -user abc -exec rm -rf {} +
 # the node's libdir, not Fedora's. Deployed by the chart in charts/dailytop/.
 FROM desktop AS k8s
 
-# libva-utils = vainfo; the rest are cluster debugging conveniences.
-ARG K8S_PACKAGES="libva-utils iproute plocate"
+# libva-utils = vainfo; plocate is a cluster debugging convenience.
+ARG K8S_PACKAGES="libva-utils plocate"
 
 RUN if [ -n "${K8S_PACKAGES}" ]; then dnf install -y ${K8S_PACKAGES}; fi && dnf clean all
 

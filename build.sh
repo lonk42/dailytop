@@ -5,7 +5,7 @@
 #   ./build.sh <base|desktop|full|k8s|coder> [extra docker buildx args...]
 #
 # Env: IMAGE_NAME (dailytop), TAG (the target name), BUILDER (dailytop-builder),
-#      PLATFORM (unset).
+#      PLATFORM (unset), BUILD_ARGS_FILE (./build.args).
 #
 # See docs/building.md.
 set -euo pipefail
@@ -50,6 +50,26 @@ if [ "$needs_insecure" = 1 ]; then
 fi
 
 [ -n "$PLATFORM" ] && args+=(--platform "$PLATFORM")
+
+# Environment-specific arg values (private flatpaks, extra packages) belong in a
+# gitignored file rather than a tracked default. Command-line args still win.
+ARGS_FILE="${BUILD_ARGS_FILE:-$DIR/build.args}"
+if [ -f "$ARGS_FILE" ]; then
+	echo ">>> reading build args from $ARGS_FILE"
+	lineno=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		lineno=$((lineno + 1))
+		line="${line%$'\r'}"
+		case "$line" in
+			''|'#'*) continue ;;
+			[A-Za-z_]*=*) args+=(--build-arg "$line") ;;
+			*)
+				echo "$ARGS_FILE:$lineno: expected NAME=value, got: $line" >&2
+				exit 1
+				;;
+		esac
+	done < "$ARGS_FILE"
+fi
 
 ref="$IMAGE_NAME:$TAG"
 args+=(--load -t "$ref")
