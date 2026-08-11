@@ -465,5 +465,7 @@ It is off by default because it makes `PUID`/`PGID` inert and relaxes group perm
 paths the init scripts write. What it changes, what the deployment must supply, and why
 `SETUID`/`SETGID` cannot help: [unprivileged.md](unprivileged.md).
 
-The `svc-selkies` `PULSE_RUNTIME_PATH` patch is applied to this stage **unconditionally**,
-because it is a strict generalisation — unset, the behaviour is byte-identical to upstream.
+The sink setup that `base` replaces with `selkies-audio-setup` covers this stage too. It
+resolves the socket from `PULSE_RUNTIME_PATH` via `pactl` rather than the hardcoded
+`/defaults` the upstream block waited on, so no separate unprivileged patch is needed:
+[troubleshooting.md](troubleshooting.md#no-audio-the-output-sink-was-never-created).

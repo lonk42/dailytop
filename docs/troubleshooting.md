@@ -710,7 +710,7 @@ category — deliberate behaviour changes, and they stay.)
 
 | # | Patch | Stage | Delete when |
 |---|-------|-------|-------------|
-| 1 | selkies monitor-task leak + blocking `nvidia-smi` | `base` | LinuxServer's `lsio` selkies branch merges upstream `main` |
+| 1 | selkies monitor-task leak + blocking `nvidia-smi` | `base` | `lsio` picks up upstream `47d2c1346` — **the leak half only**, see below |
 | 2 | explicit `runc` install | `full` | the base ships an OCI runtime again |
 | 3 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block waits on real readiness **and** checks `pactl` succeeded before stamping its lock |
 
@@ -727,15 +727,46 @@ round trip, so it measures the blocked loop), and a flood of `Error reading Wayl
 clipboard` — which is `asyncio.wait_for` timing out against a **blocked loop**, not a
 slow compositor.
 
-Fixed upstream by **`47d2c1346`** (the leak) and **`689a201ee`** (`to_thread`). It is
-still carried here because LinuxServer builds selkies from their own `lsio` branch,
+The leak half is fixed upstream by **`47d2c1346`**. The `to_thread` half is **ours, not
+a backport** — `689a201ee` is commonly cited for it but is actually a cursor/latency
+commit and does not contain it, so no upstream merge will ever deliver that half. Both
+are still carried here because LinuxServer builds selkies from their own `lsio` branch,
 which has diverged from `main` — **bumping the LinuxServer pin alone does NOT pick these
-up.** See [selkies-layer-analysis.md](selkies-layer-analysis.md).
+up.** Verified on ls286 and again on ls289: both pin `a4aadef97` and ship a
+byte-identical `selkies.py`. See [selkies-layer-analysis.md](selkies-layer-analysis.md).
+
+**Applied at the creation site, deliberately.** The sed turns each task into a genuine
+per-connection local via chained assignment (`_x = self._x = asyncio.create_task(...)`),
+leaving upstream's `locals()` cleanup to work as written. The obvious alternative —
+rewriting the cleanup to `getattr(self, "_x_task_ws", None)` — is wrong with **two
+browser tabs open**: the instance attribute is overwritten by each new connection, so
+tab A disconnecting cancels tab B's monitors, leaking A's loop *and* silently killing
+the stats of a tab that is still connected. Verified by AST that all four creation sites
+and all four cleanup sites live in the same function (`ws_handler`), so the locals are
+in scope for `locals()`.
+
+Consequence for the guards: this patch **keeps** the `locals()` form and asserts it is
+still present *after* the sed. The removal signal is therefore either the `create_task`
+shape changing or the `locals()` cleanup disappearing.
+
+Upstream's own fix takes the same shape: `47d2c1346` binds a per-connection local,
+assigns it to `self._X_task_ws` on the following line, and drops the `locals()` lookups
+in favour of iterating those locals directly. So when `lsio` picks it up, the first
+guard stops matching `self._gpu_monitor_task_ws = asyncio.create_task(` and the build
+fails — which is the signal working as intended.
 
 ```bash
-# Has the lsio fork caught up?  behind_by 0 => yes.
+# Has the lsio fork caught up?
+# NOTE the direction: for `lsio...main`, ahead_by = commits main has that lsio LACKS
+# (how far lsio trails), and behind_by = lsio's own commits. The merge signal is
+# **ahead_by 0**, NOT behind_by 0 — an earlier version of this recipe had it inverted
+# and would never have fired. (As of 2026-08-11: ahead_by 99, behind_by 6.)
 curl -s https://api.github.com/repos/selkies-project/selkies/compare/lsio...main \
-  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['status'],'behind_by',d['behind_by'])"
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['status'],'ahead_by',d['ahead_by'],'behind_by',d['behind_by'])"
+
+# Is the fix commit still absent from lsio?  (prints it if lsio still lacks it)
+curl -s https://api.github.com/repos/selkies-project/selkies/compare/lsio...main \
+  | python3 -c "import sys,json;[print(c['sha'][:9],c['commit']['message'].splitlines()[0]) for c in json.load(sys.stdin)['commits'] if c['sha'].startswith('47d2c1346')]"
 
 # What selkies commit does the base currently pin?
 curl -s https://raw.githubusercontent.com/linuxserver/docker-baseimage-selkies/fedora44/Dockerfile \
@@ -747,8 +778,14 @@ docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -
    echo "bug lookups (0 = fixed): $(grep -c "_task_ws\" in locals()" $F)"'
 ```
 
-If that count is **0**, delete the whole `RUN SELKIES_PY=...` block from the `base`
-stage — its first guard will otherwise fail the build.
+If that count is **0**, upstream's restructure has landed and the leak half is done.
+Delete the creation-site sed and the three guards that reference `create_task` and
+`locals()` — the first of them will otherwise fail the build.
+
+**Keep the `to_thread` sed and its count guard.** That half is ours; a count of 0 says
+nothing about it, and `47d2c1346` does not touch `GPUtil.getGPUs()`. Deleting the whole
+`RUN SELKIES_PY=...` block puts the blocking `nvidia-smi` back on the event loop with no
+guard left to notice.
 
 ### 2. explicit `runc`
 

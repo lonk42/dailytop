@@ -119,9 +119,13 @@ and watch for reconvergence.
 ## 5. Re-running this analysis
 
 ```bash
-# Has LS's fork caught up with upstream?  behind_by 0 => yes, drop our patches.
+# Has LS's fork caught up with upstream?  ahead_by 0 => yes, drop our patches.
+# NOTE the direction: for `lsio...main`, ahead_by = commits main has that lsio LACKS
+# (how far lsio trails), and behind_by = lsio's own commits. So the signal is
+# **ahead_by 0**, NOT behind_by 0 — an earlier version of this recipe had it inverted
+# and would never have fired. (As of 2026-08-11: ahead_by 99, behind_by 6.)
 curl -s https://api.github.com/repos/selkies-project/selkies/compare/lsio...main \
-  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['status'],'behind_by',d['behind_by'])"
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['status'],'ahead_by',d['ahead_by'],'behind_by',d['behind_by'])"
 
 # What does the LS base pin right now?
 curl -s https://raw.githubusercontent.com/linuxserver/docker-baseimage-selkies/fedora44/Dockerfile \

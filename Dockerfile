@@ -183,17 +183,23 @@ RUN grep -q 'kwin_wayland --no-lockscreen --xwayland &' /defaults/startwm_waylan
 # asyncio loop. Together they are what makes a long-lived desktop degrade. DELETE this
 # block when the guards start failing -- that is the removal signal.
 # Detail + the exact delete-check: docs/troubleshooting.md#upstream-patches-carried-here-and-when-to-delete-them
+# NOTE: patched at the task *creation* site, not the cleanup. Chained assignment binds
+# a genuine per-connection local so upstream's `locals()` cleanup starts working as
+# written -- which is why the `locals()` form is deliberately KEPT and asserted after
+# the sed, unlike every other guard here. Rewriting the cleanup to `getattr(self, ...)`
+# instead would cancel the wrong tab's tasks; see the docs link above.
 RUN SELKIES_PY="$(ls /lsiopy/lib/python3.*/site-packages/selkies/selkies.py)" && \
+	grep -q 'self\._gpu_monitor_task_ws = asyncio\.create_task(' "$SELKIES_PY" && \
 	grep -q '_gpu_monitor_task_ws" in locals()' "$SELKIES_PY" && \
 	grep -q 'GPUtil\.getGPUs()' "$SELKIES_PY" && \
 	sed -i -E \
-		-e 's/if "(_[a-z_]+_task_ws)" in locals\(\):/if getattr(self, "\1", None):/' \
-		-e 's/_task_to_cancel = locals\(\)\["(_[a-z_]+_task_ws)"\]/_task_to_cancel = getattr(self, "\1", None)/' \
+		-e 's/self\.(_[a-z_]+_task_ws) = asyncio\.create_task\(/\1 = self.\1 = asyncio.create_task(/' \
 		-e 's/GPUtil\.getGPUs\(\)/await asyncio.to_thread(GPUtil.getGPUs)/g' \
 		"$SELKIES_PY" && \
-	! grep -q '_task_ws" in locals()' "$SELKIES_PY" && \
+	[ "$(grep -c '_task_ws = self\._[a-z_]*_task_ws = asyncio\.create_task(' "$SELKIES_PY")" = "4" ] && \
+	[ "$(grep -c 'to_thread(GPUtil\.getGPUs)' "$SELKIES_PY")" = "3" ] && \
+	grep -q '_gpu_monitor_task_ws" in locals()' "$SELKIES_PY" && \
 	! grep -q 'GPUtil\.getGPUs()' "$SELKIES_PY" && \
-	[ "$(grep -c 'to_thread(GPUtil.getGPUs)' "$SELKIES_PY")" = "3" ] && \
 	/lsiopy/bin/python3 -m py_compile "$SELKIES_PY"
 
 # The base discards pulseaudio's output, so a pulseaudio that will not start is invisible
