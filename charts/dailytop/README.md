@@ -88,18 +88,35 @@ is crash-looping and streaming nothing — a rollout then completes and the endp
 traffic with a black screen behind it.
 
 `probes.sessionCommand` requires both processes a stream needs: selkies serves it, kwin
-produces the frames.
+produces the frames — and then checks that they are still the pair that was bound
+together.
 
 ```yaml
 probes:
   sessionCommand:
     - /bin/sh
     - -c
-    - pgrep -x selkies >/dev/null && pgrep -x kwin_wayland >/dev/null
+    - |
+      pgrep -x selkies >/dev/null || exit 1
+      pgrep -x kwin_wayland >/dev/null || exit 1
+      s=$(s6-svstat -o updownfor /run/service/svc-selkies 2>/dev/null) || exit 0
+      d=$(s6-svstat -o updownfor /run/service/svc-de 2>/dev/null) || exit 0
+      case "$s:$d" in *[!0-9:]*|*::*|:*|*:) exit 0 ;; esac
+      [ "$s" -le "$((d + 60))" ]
 ```
 
 Matched on process **name**. `pgrep -f 'bin/selkies'` matches the probe's own `sh -c`
 command line and succeeds no matter what is running — verified, not theoretical.
+
+Both processes being alive is not sufficient. selkies binds its screen capture to the
+desktop session once, so a desktop that restarted on its own reconnects to the socket
+but is never captured: the stream is dead while both processes report up and s6 reports
+everything healthy. selkies is started first and never by much, so a selkies far older
+than the desktop means they are no longer that pair — the age comparison is what catches
+it. The image carries its own guard for this
+([troubleshooting](../../docs/troubleshooting.md#the-desktop-restarted-and-the-stream-never-came-back));
+the probe is what recovers a pod running an older image. Where `s6-svstat` cannot
+answer, the check is skipped and the process tests stand alone.
 
 Liveness runs the same check with slack thresholds (3.5 minutes). s6 restarts a dead
 service by itself; this only fires once that has stopped working, and it turns a silent

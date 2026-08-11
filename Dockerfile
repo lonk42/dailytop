@@ -274,6 +274,33 @@ RUN chmod 0755 /usr/local/bin/selkies-audio-setup && \
 	grep -q '^/usr/local/bin/selkies-audio-setup$' "$SELKIES_RUN" && \
 	bash -n "$SELKIES_RUN"
 
+# svc-de waits only for selkies' compositor socket to exist, which cannot distinguish a
+# fresh selkies from one that already bound its capture to an earlier session. Restart
+# selkies instead, so the pair is rebuilt together.
+# docs/troubleshooting.md#the-desktop-restarted-and-the-stream-never-came-back
+RUN cat > /tmp/de-capture-guard <<'EOF'
+  # selkies binds screen capture to the desktop session once, so a DE starting against a
+  # selkies that already served an earlier session reconnects but is never captured --
+  # the stream is dead while every service reports up. Rebuild the pair instead.
+  if [ -e "${SOCKET_PATH}" ] && \
+     [ "$(s6-svstat -o up /run/service/svc-selkies 2>/dev/null)" = "true" ] && \
+     [ "$(s6-svstat -o updownfor /run/service/svc-selkies 2>/dev/null || echo 0)" -gt 60 ]; then
+    echo "[svc-de] ${SOCKET_PATH} predates this session; restarting svc-selkies to rebuild capture"
+    s6-svc -r /run/service/svc-selkies
+    sleep 5
+    exit 1
+  fi
+EOF
+RUN DE_RUN=/etc/s6-overlay/s6-rc.d/svc-de/run && \
+	grep -qF 'SOCKET_PATH="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-1}"' "$DE_RUN" && \
+	grep -qF 'while [ ! -e "${SOCKET_PATH}" ]; do' "$DE_RUN" && \
+	! grep -qF 'svc-selkies' "$DE_RUN" && \
+	sed -i '/^  SOCKET_PATH=/r /tmp/de-capture-guard' "$DE_RUN" && \
+	rm -f /tmp/de-capture-guard && \
+	grep -qF 's6-svc -r /run/service/svc-selkies' "$DE_RUN" && \
+	[ "$(grep -cF 'svc-selkies' "$DE_RUN")" = "4" ] && \
+	bash -n "$DE_RUN"
+
 
 # =============================================================================
 #  desktop -- lock screen, flatpak machinery, flatpak apps

@@ -14,6 +14,7 @@ Logs live **only** in the container's stdout — `docker logs <container>` or
 - [Container env is truncated at the first newline](#container-env-is-truncated-at-the-first-newline)
 - [`svc-docker` restart loop stacks tmpfs on `/tmp`](#svc-docker-restart-loop-stacks-tmpfs-on-tmp)
 - ["Waiting for stream" — the VAAPI fd leak](#waiting-for-stream--the-vaapi-fd-leak)
+- [The desktop restarted and the stream never came back](#the-desktop-restarted-and-the-stream-never-came-back)
 - [Never restart selkies to fix the desktop](#never-restart-selkies-to-fix-the-desktop)
 - [Stuck modifier key](#stuck-modifier-key)
 - [The X display number changes between base versions](#the-x-display-number-changes-between-base-versions)
@@ -451,6 +452,81 @@ Mitigation was `SELKIES_ENCODER=x264enc-striped,jpeg` plus
 `SELKIES_USE_CPU=true|locked` to stay on CPU. This is a **VAAPI-specific** code path;
 NVENC is separate, so re-test it fresh rather than assuming it leaks too.
 
+Measured on NVENC (RTX 2070 SUPER) across five browser reconnect cycles: total fds,
+`nvidia`/`dri` fds and dmabufs all flat at 73 / 29 / 8. **NVENC does not leak.** A
+"Waiting for stream" on the NVENC path is the next section, not this one.
+
+---
+
+## The desktop restarted and the stream never came back
+
+The browser sits on "Waiting for stream" forever. Everything reports healthy: the pod is
+`Running` with no restarts, `s6-svstat` says every service is `up`, and the logs show a
+complete, successful pipeline start on each connect —
+
+```
+[Wayland] Nvidia Encoder detected. Initializing NVENC...
+[NVENC] Initialized successfully (4:4:4 mode: false).
+[Wayland] Decision: Zero-Copy path active.
+Stream settings active -> Res: 2560x1300 | FPS: 60.0 | ...
+```
+
+— and then no frames, ever. Audio works. The WebSocket is alive and chatty: a 20-second
+connection takes ~800 frames totalling ~10 KB, which is stats and cursor updates with
+**zero video payload**. Forcing damage by launching an app changes nothing.
+
+### Cause
+
+In `PIXELFLUX_WAYLAND` mode selkies is the outer compositor and kwin nests inside it as
+a client. selkies binds its screen capture to the desktop session **once**. Upstream's
+`svc-de/run` waits only for the socket to exist:
+
+```bash
+SOCKET_PATH="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-1}"
+while [ ! -e "${SOCKET_PATH}" ]; do sleep 0.5; done
+```
+
+That cannot distinguish a fresh selkies from one that already bound an earlier session.
+So when the desktop dies on its own and s6 restarts it, the new kwin connects to the old
+socket, is accepted at the protocol level, and is never captured.
+
+The coupling only exists in one direction: restarting selkies takes the desktop down
+with it, but restarting the desktop leaves selkies untouched. s6 healing `svc-de` is
+precisely what produces the broken state, which is why nothing anywhere reports a fault.
+
+Confirm it by comparing service ages — the desktop far younger than selkies is the tell:
+
+```bash
+s6-svstat -o updownfor /run/service/svc-selkies   # e.g. 682067
+s6-svstat -o updownfor /run/service/svc-de        # e.g. 157764
+```
+
+### Recovery on a running container
+
+Restarting `svc-de` alone does **not** work — verified; it reproduces the same dead
+stream. Restart selkies, which brings the desktop back with it:
+
+```bash
+s6-svc -r /run/service/svc-selkies
+```
+
+This kills every open app, for the reason in
+[never restart selkies](#never-restart-selkies-to-fix-the-desktop). There is no in-place
+way to re-bind the capture.
+
+### The fix carried here
+
+`base` inserts a guard ahead of that socket wait: if the socket already exists **and**
+selkies has been up more than 60 seconds, the desktop is starting against a selkies
+that served an earlier session, so it restarts selkies and exits rather than joining a
+pairing that cannot stream. s6 brings the desktop back behind it. The guard lives in
+`run` rather than `finish` so it never executes during container shutdown, and the
+60-second floor is what stops it from firing on its own restart — at boot the two start
+seconds apart.
+
+The chart's probes carry the same check independently, so an older image still recovers:
+see `probes.sessionCommand` in `values.yaml`.
+
 ---
 
 ## No audio: the output sink was never created
@@ -700,7 +776,7 @@ Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`
 
 ## Upstream patches carried here, and when to delete them
 
-The `Dockerfile` carries three patches that are **workarounds for upstream bugs, not
+The `Dockerfile` carries four patches that are **workarounds for upstream bugs, not
 choices**. All are guarded so **the build fails once the bug is gone** — that failure
 is the removal signal, not a regression. Do not "fix" a guard failure by loosening the
 guard.
@@ -713,6 +789,7 @@ category — deliberate behaviour changes, and they stay.)
 | 1 | selkies monitor-task leak + blocking `nvidia-smi` | `base` | `lsio` picks up upstream `47d2c1346` — **the leak half only**, see below |
 | 2 | explicit `runc` install | `full` | the base ships an OCI runtime again |
 | 3 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block waits on real readiness **and** checks `pactl` succeeded before stamping its lock |
+| 4 | `svc-de` restarts selkies rather than joining a stale capture | `base` | `svc-de/run` checks the socket belongs to a selkies that has not already bound a session |
 
 ### 1. selkies leaked monitor tasks
 
@@ -824,6 +901,27 @@ Delete the patch only if that block both waits on something that implies the soc
 accepting (not the pidfile) **and** makes the `touch` conditional on the sinks existing.
 Fixing only the wait is not enough: the unconditional lock is what makes a failure
 permanent.
+
+### 4. `svc-de` rebuilds the pair instead of joining a stale capture
+
+Upstream's `svc-de/run` treats the existence of selkies' compositor socket as permission
+to start, which cannot tell a fresh selkies from one that already bound its capture to
+an earlier desktop. Full analysis:
+[the desktop restarted](#the-desktop-restarted-and-the-stream-never-came-back).
+
+Three guards hold it to the upstream shape — the `SOCKET_PATH` assignment, the
+`while [ ! -e "${SOCKET_PATH}" ]` wait, and the absence of any `svc-selkies` reference in
+the file — so any rework upstream fails the build.
+
+```bash
+docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -c \
+  'grep -c svc-selkies /etc/s6-overlay/s6-rc.d/svc-de/run'
+```
+
+If that count is **non-zero**, upstream has taken a view on the coupling: read what it
+does before deleting this. Only drop the patch if a desktop restarting alone either
+restarts selkies or re-binds the capture — reconnecting to the socket is not enough, and
+is exactly the behaviour that fails.
 
 ### Bumping the base pin
 

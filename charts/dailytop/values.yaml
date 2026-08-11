@@ -195,10 +195,23 @@ probes:
   # Both processes are required for a usable stream: selkies serves it, kwin produces
   # the frames. Matched on process NAME -- `pgrep -f` matches the probe's own shell in
   # its own command line and would succeed no matter what is running.
+  #
+  # Both being alive is not sufficient. selkies binds its screen capture to the desktop
+  # session once, so a desktop that restarted on its own reconnects but is never
+  # captured: the stream is dead while both processes report up. The last check catches
+  # that pairing by age -- selkies is started first and never by much, so a selkies far
+  # older than the desktop means they are no longer the pair that was bound together.
+  # Skipped where s6-svstat cannot answer, leaving the process checks alone.
   sessionCommand:
     - /bin/sh
     - -c
-    - pgrep -x selkies >/dev/null && pgrep -x kwin_wayland >/dev/null
+    - |
+      pgrep -x selkies >/dev/null || exit 1
+      pgrep -x kwin_wayland >/dev/null || exit 1
+      s=$(s6-svstat -o updownfor /run/service/svc-selkies 2>/dev/null) || exit 0
+      d=$(s6-svstat -o updownfor /run/service/svc-de 2>/dev/null) || exit 0
+      case "$s:$d" in *[!0-9:]*|*::*|:*|*:) exit 0 ;; esac
+      [ "$s" -le "$((d + 60))" ]
 
   startup:
     enabled: true
