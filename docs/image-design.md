@@ -127,6 +127,46 @@ event loop. It is what makes a long-lived desktop degrade. Full detail, measurem
 the exact delete-check in [upstream patches carried
 here](troubleshooting.md#upstream-patches-carried-here-and-when-to-delete-them).
 
+### Defaults for selkies range settings
+
+A selkies `range` setting holds two independent things: the bounds a client may choose
+between, and the value a client starts on.
+`SELKIES_FRAMERATE` sets only the bounds — `8-120` for a range, a bare `30` to lock it.
+The starting value is a separate constant in the setting definition
+(`meta['default_value']`, 60 for framerate) that no environment variable reaches.
+
+So narrowing the bounds leaves the starting value outside them, and it is clamped to the
+nearest one.
+`SELKIES_FRAMERATE=8-30` starts every session at 30 — the value you were capping away
+from.
+Locking the setting to `30` does start there, at the cost of the slider.
+
+`SELKIES_<NAME>_DEFAULT` separates the two.
+It is read in the `range` branch of the settings parser, after the bounds are known, and
+applies to every range setting:
+
+| Variable | Bounds from | Stock default |
+|---|---|---|
+| `SELKIES_FRAMERATE_DEFAULT` | `SELKIES_FRAMERATE` | 60 |
+| `SELKIES_H264_CRF_DEFAULT` | `SELKIES_H264_CRF` | 25 |
+| `SELKIES_VIDEO_BITRATE_DEFAULT` | `SELKIES_VIDEO_BITRATE` | 8 |
+| `SELKIES_JPEG_QUALITY_DEFAULT` | `SELKIES_JPEG_QUALITY` | 40 |
+| `SELKIES_PAINT_OVER_JPEG_QUALITY_DEFAULT` | `SELKIES_PAINT_OVER_JPEG_QUALITY` | 90 |
+| `SELKIES_H264_PAINTOVER_CRF_DEFAULT` | `SELKIES_H264_PAINTOVER_CRF` | 18 |
+| `SELKIES_H264_PAINTOVER_BURST_FRAMES_DEFAULT` | `SELKIES_H264_PAINTOVER_BURST_FRAMES` | 5 |
+
+The value is clamped into the bounds, so a locked setting still wins and an out-of-range
+default is a no-op rather than an error. A non-numeric value logs a warning and leaves
+the stock default in place. There is no matching CLI flag; upstream derives those from
+the setting definitions, and this is not one.
+
+The patch is a single insertion because all three consumers of a range default read the
+same dict: the server's own initial framerate, the `default` field in the
+`server_settings` payload the dashboard's slider initialises from, and the fallback used
+when a client sends no value for a setting. The guards assert the parse branch upstream
+still has, and that the file is unpatched — so re-running the build after upstream adds
+its own `_DEFAULT` handling fails rather than patching twice.
+
 ## desktop
 
 ### Flatpak apps in the KDE menu

@@ -36,6 +36,10 @@ dailytop is a much fatter base including support for a larger variety of desktop
 - **A cloud and Kubernetes toolkit** in `base`, inherited by every variant: aws, az and
   gcloud; kubectl, helm, oc, k9s and argocd; Terraform and OpenTofu; kustomize, rclone,
   restic and s3cmd; VS Code, Firefox and Chromium.
+- **Separable defaults for the stream quality settings.**
+  `SELKIES_FRAMERATE` and its siblings set the bounds a client may choose between;
+  `SELKIES_<NAME>_DEFAULT` sets where it starts.
+  [Detail](docs/image-design.md#defaults-for-selkies-range-settings)
 - **Customisable.** Package lists, flatpak lists, tool versions and the base image pin
   are all build args. [Detail](docs/building.md)
 
@@ -173,6 +177,7 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
 | `PRIVATE_REGISTRY` | *(empty)* | Registry `host[:port]` to trust from the inner DinD daemon |
 | `SSHD_CONFIG` | `/defaults/sshd_config` | Use your own sshd config |
 | `SELKIES_ENCODER` | per variant | Ordered fallback list — [read this first](docs/troubleshooting.md#the-encoder-model-read-this-first) |
+| `SELKIES_<NAME>_DEFAULT` | per setting | Starting value for a range setting such as `SELKIES_FRAMERATE`, separate from its bounds — [detail](docs/image-design.md#defaults-for-selkies-range-settings) |
 | `FIREFOX_DISABLE_AV1` | `false`, `true` on `k8s` | Forces YouTube to VP9, for cards with no AV1 decode block |
 | `MOZ_DISABLE_RDD_SANDBOX` | *(unset)* | Required for Firefox hardware decode; weakens its media-decoder sandbox |
 
