@@ -129,7 +129,7 @@ $EDITOR examples/coder-template/main.tf   # locals: namespace, image, ca_cert_se
 cd examples/coder-template && coder templates push dailytop
 ```
 
-Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls286-<version>` and
+Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls290-<version>` and
 `local.unprivileged = true` on a cluster that forbids root containers. Behind an internal
 CA, `local.ca_cert_secret` is required — without it the agent's first curl fails `x509`
 and the workspace never reports healthy, with the desktop up the whole time.

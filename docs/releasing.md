@@ -13,11 +13,11 @@ digest:
 | Tag | Moves? | Use for |
 |---|---|---|
 | `dailytop:coder` | yes | trying it out |
-| `dailytop:coder-ls286-0.0.1` | no | **deployments** |
+| `dailytop:coder-ls290-0.0.1` | no | **deployments** |
 | `dailytop:coder-unpriv` | yes | trying the unprivileged build |
-| `dailytop:coder-unpriv-ls286-0.0.1` | no | **unprivileged deployments** |
+| `dailytop:coder-unpriv-ls290-0.0.1` | no | **unprivileged deployments** |
 | `dailytop:k8s` | yes | trying the GPU build |
-| `dailytop:k8s-ls286-0.0.1` | no | **GPU deployments** |
+| `dailytop:k8s-ls290-0.0.1` | no | **GPU deployments** |
 
 A variant is a stage plus the build args that define it. `coder` and `coder-unpriv` are
 both `--target coder`, differing only by `UNPRIVILEGED` — see
@@ -26,7 +26,7 @@ never moves the tag another variant's deployments follow.
 
 The immutable form is `<variant>-<lsNNN>-<version>`, where `lsNNN` is the LinuxServer
 build number lifted from the base pin (`WEBTOP_BASE_IMAGE` →
-`fedora-kde-37cda392-ls286` → `ls286`) and the version is the git tag verbatim. The full
+`fedora-kde-1cad2397-ls290` → `ls290`) and the version is the git tag verbatim. The full
 base reference is recorded as the `org.dailytop.base-image` label.
 
 Pin deployments to an immutable tag. A moving tag plus `imagePullPolicy: IfNotPresent`
@@ -42,7 +42,7 @@ the push.
 
 The same tag publishes [`charts/dailytop`](../charts/dailytop/README.md) to
 `oci://ghcr.io/<owner>/charts/dailytop`, versioned with the git tag and stamped with
-appVersion `<lsNNN>-<version>` — `ls286-0.0.1`. The chart composes its default image tag
+appVersion `<lsNNN>-<version>` — `ls290-0.0.1`. The chart composes its default image tag
 from that appVersion and `image.variant`, so a chart pulled at `--version 0.0.1` deploys
 the images the same tag built, with nothing to keep in step by hand.
 

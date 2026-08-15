@@ -15,7 +15,7 @@
 
 # Pinned, not rolling: the rolling tag relocates the session scripts these seds patch.
 # docs/image-design.md#the-base-pin
-ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-37cda392-ls286
+ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-1cad2397-ls290
 
 
 # =============================================================================
@@ -823,12 +823,12 @@ ENV AUTO_GPU=false
 ENV LIBGL_ALWAYS_SOFTWARE=1
 
 # Chromium and Electron cannot sandbox where chrome-sandbox is not setuid and the seccomp
-# filter blocks the userns fallback. The base's wrapped-chromium already covers the menu
-# launcher; these two cover the CLI and VS Code, reusing its runtime seccomp test so a
-# privileged container keeps its sandbox. docs/unprivileged.md#chromium-and-vs-code
+# filter blocks the userns fallback. The base's wrapped-chromium covers the menu launcher
+# by dropping the sandbox unconditionally; these two cover the CLI and VS Code, testing at
+# runtime so a privileged container keeps it. docs/unprivileged.md#chromium-and-vs-code
 RUN cat > /tmp/chromium-nosandbox.conf <<'EOF'
 
-# Mirrors wrapped-chromium: under a seccomp filter no sandbox is available here.
+# Under a seccomp filter no sandbox is available here.
 grep -q 'Seccomp:.0' /proc/1/status || CHROMIUM_FLAGS+=" --no-sandbox --test-type"
 EOF
 RUN grep -q 'CHROMIUM_FLAGS' /etc/chromium/chromium.conf && \

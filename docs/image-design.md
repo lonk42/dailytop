@@ -436,15 +436,16 @@ because the compositor's probe is Rust/Smithay talking to GBM directly, not mesa
 fallback, so both abort or fail to start wherever a filter is active — which includes a
 stock `docker run` (`Seccomp: 2`), not just a restricted pod.
 
-The base's own `wrapped-chromium` already tests `/proc/1/status` for `Seccomp: 0` and adds
-`--no-sandbox --test-type` when a filter is present, but only for its own menu launcher.
-This stage extends the identical test to the two paths it misses: an appended
-`/etc/chromium/chromium.conf` line, so a bare `chromium-browser` behaves like the launcher,
-and a `/usr/local/bin/code` wrapper that the `code` desktop entries are repointed at
+The base's own `wrapped-chromium` passes `--no-sandbox --test-type` unconditionally, and
+only for its own menu launcher. This stage covers the two paths it misses, testing
+`/proc/1/status` for `Seccomp: 0` at runtime instead: an appended
+`/etc/chromium/chromium.conf` line, so a bare `chromium-browser` is covered, and a
+`/usr/local/bin/code` wrapper that the `code` desktop entries are repointed at
 (`/usr/local/sbin` is a symlink to `bin`, so it wins in `PATH` too).
 
 Deciding at runtime rather than baking the flag in means **a privileged container keeps
-its sandbox**. Do not simplify these to an unconditional `--no-sandbox`.
+its sandbox** on those two paths. Do not simplify these to an unconditional
+`--no-sandbox`. The menu launcher follows upstream and has no sandbox either way.
 
 ### No HTTP basic auth
 

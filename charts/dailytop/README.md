@@ -23,8 +23,8 @@ helm install desktop oci://ghcr.io/lonk42/charts/dailytop --version <version> \
 ## Image selection
 
 `image.tag` is empty by default and composed from `image.variant` and the chart's
-appVersion: variant `k8s` at appVersion `ls286-1.1.0` gives
-`ghcr.io/lonk42/dailytop:k8s-ls286-1.1.0`. A chart published from tag `1.1.0` therefore
+appVersion: variant `k8s` at appVersion `ls290-1.1.0` gives
+`ghcr.io/lonk42/dailytop:k8s-ls290-1.1.0`. A chart published from tag `1.1.0` therefore
 defaults to the images that same tag built. Set `image.tag` to pin something else.
 
 | `image.variant` | For |

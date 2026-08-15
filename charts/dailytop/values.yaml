@@ -6,7 +6,7 @@
 image:
   repository: ghcr.io/lonk42/dailytop
   # Image variant, prefixed to the chart's appVersion to form the tag: `k8s` gives
-  # `k8s-ls286-1.0.0`. Set `tag` to override the whole thing.
+  # `k8s-ls290-1.0.0`. Set `tag` to override the whole thing.
   variant: k8s
   tag: ""
   pullPolicy: IfNotPresent

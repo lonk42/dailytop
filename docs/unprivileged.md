@@ -6,7 +6,7 @@ and it is off by default because it makes `PUID`/`PGID` inert and relaxes group
 permissions on paths the init scripts write.
 
 CI publishes this as its own variant, so you do not have to build it yourself:
-`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls286-<version>` (immutable —
+`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls290-<version>` (immutable —
 use this one). See [releasing.md](releasing.md).
 
 FIPS is a separate problem — see [FIPS](#fips) at the bottom.
@@ -279,14 +279,15 @@ FATAL: The SUID sandbox helper binary was found, but is not configured correctly
 Rather than run without sandboxing I'm aborting now.
 ```
 
-The base already handles its own menu launcher — `wrapped-chromium` tests
-`/proc/1/status` for `Seccomp: 0` and adds `--no-sandbox --test-type` when a filter is
-active. The image extends the same runtime test to the two paths it misses:
-`/etc/chromium/chromium.conf` (so a bare `chromium-browser` behaves like the launcher) and
-a `/usr/local/bin/code` wrapper that the `code` desktop entries are repointed at.
+The base already handles its own menu launcher — `wrapped-chromium` passes
+`--no-sandbox --test-type` unconditionally. The image covers the two paths it misses,
+testing `/proc/1/status` for `Seccomp: 0` at runtime instead: `/etc/chromium/chromium.conf`
+(so a bare `chromium-browser` is covered) and a `/usr/local/bin/code` wrapper that the
+`code` desktop entries are repointed at.
 
-Because the test is made at runtime, **a privileged container keeps its sandbox** — the
-flag is not baked in. Note `Seccomp: 2` is what a stock `docker run` reports, so the
+Because the test is made at runtime, **a privileged container keeps its sandbox** on those
+two paths — the flag is not baked in. The menu launcher follows upstream and has no
+sandbox either way. Note `Seccomp: 2` is what a stock `docker run` reports, so the
 unsandboxed path is the normal one outside a `--privileged` container.
 
 Firefox is unaffected: its sandbox uses neither setuid nor `unshare` in a way the default

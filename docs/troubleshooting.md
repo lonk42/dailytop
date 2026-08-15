@@ -864,7 +864,7 @@ a backport** — `689a201ee` is commonly cited for it but is actually a cursor/l
 commit and does not contain it, so no upstream merge will ever deliver that half. Both
 are still carried here because LinuxServer builds selkies from their own `lsio` branch,
 which has diverged from `main` — **bumping the LinuxServer pin alone does NOT pick these
-up.** Verified on ls286 and again on ls289: both pin `a4aadef97` and ship a
+up.** Verified on ls286, ls289 and ls290: all three pin `a4aadef97` and ship a
 byte-identical `selkies.py`. See [selkies-layer-analysis.md](selkies-layer-analysis.md).
 
 **Applied at the creation site, deliberately.** The sed turns each task into a genuine

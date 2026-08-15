@@ -20,4 +20,4 @@ version: 1.0.0
 
 # The image release this chart defaults to, in the `<lsNNN>-<version>` form the immutable
 # image tags use. `image.variant` is prefixed to it to select a variant.
-appVersion: "ls286-1.0.0"
+appVersion: "ls290-1.0.0"
