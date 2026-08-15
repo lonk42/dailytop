@@ -202,6 +202,37 @@ RUN SELKIES_PY="$(ls /lsiopy/lib/python3.*/site-packages/selkies/selkies.py)" &&
 	! grep -q 'GPUtil\.getGPUs()' "$SELKIES_PY" && \
 	/lsiopy/bin/python3 -m py_compile "$SELKIES_PY"
 
+# A selkies range setting carries a default that no environment variable reaches, so
+# narrowing the range leaves the default outside it and the client lands on a bound.
+# docs/image-design.md#defaults-for-selkies-range-settings
+RUN cat > /tmp/range-default <<'EOF'
+                    # A range only bounds the slider; SELKIES_<NAME>_DEFAULT is where it starts.
+                    range_default = os.environ.get(f'SELKIES_{name.upper()}_DEFAULT')
+                    if range_default is not None:
+                        try:
+                            setting.setdefault('meta', {})['default_value'] = int(range_default)
+                        except (ValueError, TypeError):
+                            logging.warning(f"Invalid SELKIES_{name.upper()}_DEFAULT '{range_default}'. Using system default.")
+                    meta_default = setting.get('meta', {}).get('default_value')
+                    if meta_default is not None:
+                        setting['meta']['default_value'] = max(processed_value[0], min(int(meta_default), processed_value[1]))
+EOF
+RUN SELKIES_SETTINGS_PY="$(ls /lsiopy/lib/python3.*/site-packages/selkies/settings.py)" && \
+	grep -q "^                        processed_value = (locked_val, locked_val)$" "$SELKIES_SETTINGS_PY" && \
+	grep -q "'default_value': 60" "$SELKIES_SETTINGS_PY" && \
+	! grep -q '_DEFAULT' "$SELKIES_SETTINGS_PY" && \
+	sed -i '/^                        processed_value = (locked_val, locked_val)$/r /tmp/range-default' \
+		"$SELKIES_SETTINGS_PY" && \
+	rm -f /tmp/range-default && \
+	grep -q "SELKIES_{name.upper()}_DEFAULT" "$SELKIES_SETTINGS_PY" && \
+	/lsiopy/bin/python3 -m py_compile "$SELKIES_SETTINGS_PY" && \
+	SELKIES_FRAMERATE=8-120 SELKIES_FRAMERATE_DEFAULT=30 /lsiopy/bin/python3 -c \
+		"import sys; sys.argv=[sys.argv[0]]; from selkies.settings import settings_ws as s, \
+		FINAL_SETTING_DEFINITIONS_WEBSOCKETS as D; \
+		fr = next(x for x in D if x['name'] == 'framerate'); \
+		assert s.framerate == (8, 120), s.framerate; \
+		assert fr['meta']['default_value'] == 30, fr['meta']"
+
 # The base discards pulseaudio's output, so a pulseaudio that will not start is invisible
 # -- and the sink setup below depends on it. --log-level=0 keeps this to errors only.
 # docs/troubleshooting.md#no-audio-the-output-sink-was-never-created
