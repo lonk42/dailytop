@@ -293,13 +293,15 @@ container; there is no lock screen in the variant built that way.
 
 ## full
 
-### Docker-in-Docker and explicit runc
+### Docker-in-Docker and the OCI runtime assertion
 
-`runc` is installed explicitly and must stay that way while the base needs it. The
-LinuxServer base ships `svc-docker` enabled by default plus moby-engine, containerd and
-containerd-shim-runc-v2 — but current Fedora bases do not pull in an OCI runtime, and
-moby-engine no longer depends on one. Without runc, dockerd dies instantly and s6
-restart-loops it every ~4s forever.
+The base ships `svc-docker` enabled by default plus moby-engine, containerd and
+containerd-shim-runc-v2.
+It also ships `runc`, so this image installs only `docker-buildx` and **asserts** the
+runtime rather than installing it.
+The assertion is the point: Fedora's `moby-engine` does not depend on an OCI runtime, so
+a base rebuilt without one would otherwise ship a dockerd that dies instantly and is
+restart-looped by s6 every ~4s forever.
 
 The log noise is not the damage — [each restart stacks another tmpfs on
 `/tmp`](troubleshooting.md#svc-docker-restart-loop-stacks-tmpfs-on-tmp), which buries
@@ -322,14 +324,14 @@ pgrep -a dockerd; ls -l /dev/cpu_dma_latency   # both empty = the probe failed
 `INSTALL_DIND=false` instead — the service parks either way, but removal is the
 honest form of it.
 
-Drop `runc` and its assertion once the base ships an OCI runtime again:
+Check what a new base provides before trusting the assertion to be cheap:
 
 ```bash
 docker run --rm --entrypoint sh <base image> -c 'command -v runc || command -v crun'
 ```
 
-Harmless to keep either way — unlike the selkies patch, this one just installs a package
-that may already be present.
+If that prints nothing the build fails at the assertion, which is the intended outcome —
+put the `dnf install` back rather than removing the check.
 
 ### sshd
 

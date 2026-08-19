@@ -15,7 +15,7 @@
 
 # Pinned, not rolling: the rolling tag relocates the session scripts these seds patch.
 # docs/image-design.md#the-base-pin
-ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-1cad2397-ls290
+ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-e46b460a-ls291
 
 
 # =============================================================================
@@ -569,13 +569,13 @@ ENV PRIVATE_REGISTRY=""
 
 RUN if [ -n "${FULL_PACKAGES}" ]; then dnf install -y ${FULL_PACKAGES}; fi && dnf clean all
 
-# `runc` is EXPLICIT and must stay so while the base needs it: without an OCI runtime
-# dockerd restart-loops every ~4s, and each start stacks another tmpfs on /tmp that
-# nothing unmounts. INSTALL_DIND=false REMOVES the service, which is mandatory for any
-# image without the toolchain. docs/image-design.md#docker-in-docker-and-explicit-runc
+# The base's OCI runtime is ASSERTED, not installed: without one dockerd restart-loops
+# every ~4s, and each start stacks another tmpfs on /tmp that nothing unmounts.
+# INSTALL_DIND=false REMOVES the service, which is mandatory for any image without the
+# toolchain. docs/image-design.md#docker-in-docker-and-the-oci-runtime-assertion
 RUN if [ "${INSTALL_DIND}" = "true" ]; then \
-		dnf install -y docker-buildx runc && dnf clean all && \
-		command -v runc >/dev/null && \
+		dnf install -y docker-buildx && dnf clean all && \
+		{ command -v runc || command -v crun; } >/dev/null && \
 		ln -sf /usr/bin/tini-static /usr/local/bin/docker-init && \
 		mkdir -p /etc/docker && \
 		printf '{"features": {"containerd-snapshotter": false}, "default-address-pools": [{"base": "%s", "size": %s}]}\n' \
@@ -871,10 +871,10 @@ RUN grep -q '^sudo mkdir -p /tmp/.X11-unix$' /defaults/startwm_wayland.sh && \
 # second login for nothing, and the sed that enables it uncomments blindly. PASSWORD and
 # CUSTOM_USER are inert here. docs/image-design.md#no-http-basic-auth
 RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
-	grep -q 'if \[ ! -z \${PASSWORD+x} \]; then' "$NGINX_INIT" && \
+	grep -q 'if \[ -n "\${PASSWORD}" \]; then' "$NGINX_INIT" && \
 	grep -q 'CUSER="\${CUSTOM_USER:-abc}"' "$NGINX_INIT" && \
 	sed -i \
-		-e '/if \[ ! -z \${PASSWORD+x} \]; then/,/^fi$/d' \
+		-e '/if \[ -n "\${PASSWORD}" \]; then/,/^fi$/d' \
 		-e '/CUSER="\${CUSTOM_USER:-abc}"/d' \
 		"$NGINX_INIT" && \
 	! grep -q 'PASSWORD\|CUSTOM_USER\|htpasswd' "$NGINX_INIT" && \

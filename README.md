@@ -61,14 +61,14 @@ dailytop is a much fatter base including support for a larger variety of desktop
 | `k8s` | ✅ \*\*\* | ❌ | ✅ | ❌ |
 | `coder` | ❌ | ❌ | ❌ | ✅ \*\*\*\* |
 
-- \* `base` and `desktop` still carry the upstream `svc-docker` service with no OCI
-  runtime behind it, so dockerd restart-loops and [stacks a tmpfs on
-  `/tmp`](docs/troubleshooting.md#svc-docker-restart-loop-stacks-tmpfs-on-tmp). `full`
-  installs `runc`; `k8s` and `coder` remove the service.
+- \* `base` and `desktop` still carry the upstream `svc-docker` service.
+  The base ships an OCI runtime as of `ls291`, so it no longer restart-loops and [stacks
+  a tmpfs on `/tmp`](docs/troubleshooting.md#svc-docker-restart-loop-stacks-tmpfs-on-tmp);
+  unprivileged, it parks on `sleep infinity` instead. `k8s` and `coder` remove the service.
 - \*\* DinD requires `privileged: true`. Upstream's `svc-docker` starts dockerd only when
   `/dev/cpu_dma_latency` exists and otherwise parks on `sleep infinity`, reporting healthy
   the whole time. Build with `INSTALL_DIND=false` if you cannot grant it.
-  [Detail](docs/image-design.md#docker-in-docker-and-explicit-runc)
+  [Detail](docs/image-design.md#docker-in-docker-and-the-oci-runtime-assertion)
 - \*\*\* `k8s` adds the symlink hooks that find the injected driver in the node's libdir,
   on top of `desktop`'s NVIDIA hooks.
 - \*\*\*\* Opt-in, via `--build-arg UNPRIVILEGED=true` — published as the `coder-unpriv`
@@ -129,7 +129,7 @@ $EDITOR examples/coder-template/main.tf   # locals: namespace, image, ca_cert_se
 cd examples/coder-template && coder templates push dailytop
 ```
 
-Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls290-<version>` and
+Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls291-<version>` and
 `local.unprivileged = true` on a cluster that forbids root containers. Behind an internal
 CA, `local.ca_cert_secret` is required — without it the agent's first curl fails `x509`
 and the workspace never reports healthy, with the desktop up the whole time.

@@ -103,7 +103,7 @@ jobs:
             exit 1
           fi
 
-          # fedora-kde-1cad2397-ls290 -> ls290. Asserted, not assumed: a base pinned
+          # fedora-kde-e46b460a-ls291 -> ls291. Asserted, not assumed: a base pinned
           # without one would otherwise silently produce a nonsense image tag.
           suffix=$(printf '%s' "${base##*:}" | grep -oE 'ls[0-9]+$' || true)
           if [ -z "$suffix" ]; then

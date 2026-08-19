@@ -6,7 +6,7 @@ and it is off by default because it makes `PUID`/`PGID` inert and relaxes group
 permissions on paths the init scripts write.
 
 CI publishes this as its own variant, so you do not have to build it yourself:
-`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls290-<version>` (immutable —
+`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls291-<version>` (immutable —
 use this one). See [releasing.md](releasing.md).
 
 FIPS is a separate problem — see [FIPS](#fips) at the bottom.

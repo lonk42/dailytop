@@ -261,9 +261,11 @@ of exiting. See the next section for why that matters here.
 ## `svc-docker` restart loop stacks tmpfs on `/tmp`
 
 The LinuxServer webtop base ships `svc-docker` (an s6 service running
-`/usr/local/bin/dind` → `dockerd`) **enabled by default**, and current Fedora bases ship
-`moby-engine` + `containerd` + `containerd-shim-runc-v2` but **no OCI runtime** — Fedora
-44's `moby-engine` no longer depends on one. Without `runc`, `dockerd` dies instantly:
+`/usr/local/bin/dind` → `dockerd`) **enabled by default**.
+Fedora's `moby-engine` does not depend on an OCI runtime, so whether one is present is a
+property of the base that can change under you — `ls291` ships `runc`, earlier bases did
+not.
+Without `runc`, `dockerd` dies instantly:
 
 ```
 error initializing buildkit: error creating buildkit instance: failed to find runc binary
@@ -288,7 +290,10 @@ pgrep -x dind                          # should find nothing
 
 So: any image without the docker toolchain **must** remove the service
 (`rm /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker`), and any image with it must
-ensure an OCI runtime is present. Both are handled by the `INSTALL_DIND` build arg.
+ensure an OCI runtime is present.
+Both are handled by the `INSTALL_DIND` build arg, which removes the service when false
+and [asserts the runtime](image-design.md#docker-in-docker-and-the-oci-runtime-assertion)
+when true.
 
 ---
 
@@ -831,7 +836,7 @@ Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`
 
 ## Upstream patches carried here, and when to delete them
 
-The `Dockerfile` carries four patches that are **workarounds for upstream bugs, not
+The `Dockerfile` carries three patches that are **workarounds for upstream bugs, not
 choices**. All are guarded so **the build fails once the bug is gone** — that failure
 is the removal signal, not a regression. Do not "fix" a guard failure by loosening the
 guard.
@@ -842,9 +847,8 @@ category — deliberate behaviour changes, and they stay.)
 | # | Patch | Stage | Delete when |
 |---|-------|-------|-------------|
 | 1 | selkies monitor-task leak + blocking `nvidia-smi` | `base` | `lsio` picks up upstream `47d2c1346` — **the leak half only**, see below |
-| 2 | explicit `runc` install | `full` | the base ships an OCI runtime again |
-| 3 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block waits on real readiness **and** checks `pactl` succeeded before stamping its lock |
-| 4 | `svc-de` restarts selkies rather than joining a stale capture | `base` | `svc-de/run` checks the socket belongs to a selkies that has not already bound a session |
+| 2 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block waits on real readiness **and** checks `pactl` succeeded before stamping its lock |
+| 3 | `svc-de` restarts selkies rather than joining a stale capture | `base` | `svc-de/run` checks the socket belongs to a selkies that has not already bound a session |
 
 ### 1. selkies leaked monitor tasks
 
@@ -864,8 +868,10 @@ a backport** — `689a201ee` is commonly cited for it but is actually a cursor/l
 commit and does not contain it, so no upstream merge will ever deliver that half. Both
 are still carried here because LinuxServer builds selkies from their own `lsio` branch,
 which has diverged from `main` — **bumping the LinuxServer pin alone does NOT pick these
-up.** Verified on ls286, ls289 and ls290: all three pin `a4aadef97` and ship a
-byte-identical `selkies.py`. See [selkies-layer-analysis.md](selkies-layer-analysis.md).
+up.**
+ls286 through ls290 all pinned `a4aadef97`;
+ls291 is the first bump, to `348bc4f61`, and it carries two commits — a recording-socket passthrough and a client-side decode fallback — that leave both halves of this patch in place.
+See [selkies-layer-analysis.md](selkies-layer-analysis.md).
 
 **Applied at the creation site, deliberately.** The sed turns each task into a genuine
 per-connection local via chained assignment (`_x = self._x = asyncio.create_task(...)`),
@@ -919,21 +925,7 @@ nothing about it, and `47d2c1346` does not touch `GPUtil.getGPUs()`. Deleting th
 `RUN SELKIES_PY=...` block puts the blocking `nvidia-smi` back on the event loop with no
 guard left to notice.
 
-### 2. explicit `runc`
-
-See [`svc-docker` above](#svc-docker-restart-loop-stacks-tmpfs-on-tmp) for why a missing
-OCI runtime is destructive rather than just noisy.
-
-```bash
-docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -c \
-  'command -v runc || command -v crun || echo STILL-MISSING'
-```
-
-If a runtime is present, drop `runc` from the install list and the `command -v runc`
-assertion. Harmless to keep either way, so this one is low-priority — unlike patch 1,
-which fails the build once upstream fixes it.
-
-### 3. audio sink setup
+### 2. audio sink setup
 
 Upstream's `svc-selkies/run` treats pulseaudio's pidfile as readiness and stamps its
 once-only lock whether or not `pactl` succeeded, so a lost race means no audio for the
@@ -957,7 +949,7 @@ accepting (not the pidfile) **and** makes the `touch` conditional on the sinks e
 Fixing only the wait is not enough: the unconditional lock is what makes a failure
 permanent.
 
-### 4. `svc-de` rebuilds the pair instead of joining a stale capture
+### 3. `svc-de` rebuilds the pair instead of joining a stale capture
 
 Upstream's `svc-de/run` treats the existence of selkies' compositor socket as permission
 to start, which cannot tell a fresh selkies from one that already bound its capture to
