@@ -167,6 +167,37 @@ when a client sends no value for a setting. The guards assert the parse branch u
 still has, and that the file is unpatched — so re-running the build after upstream adds
 its own `_DEFAULT` handling fails rather than patching twice.
 
+### Clipboard history with clipit
+
+`clipit` is a GTK clipboard manager.
+It is started with `GDK_BACKEND=x11`, so it watches the clipboard through Xwayland:
+a Wayland client can only read the clipboard while it has focus, which no clipboard
+manager ever does.
+
+kwin bridges the two selections in one direction on its own.
+A copy made in an X11 client reaches the Wayland clipboard at once, and clipit records
+it at once.
+A copy made in a Wayland client reaches Xwayland only when an X11 window is next
+activated, so it enters clipit's history at that point rather than when it was copied.
+Firefox is an X11 client here, since `startwm_wayland.sh` exports `MOZ_ENABLE_WAYLAND=0`.
+
+Nothing in this session reads `/etc/xdg/autostart`.
+There is no plasma-session and no `systemd --user`, so the entry the package ships never
+fires, and neither do the base's own `kglobalacceld` and `xembedsniproxy` entries.
+clipit is backgrounded from the `bash -c` block in `startwm_wayland.sh` instead, beside
+the [lock screen helper](#the-kde-lock-screen), which is the only place the session bus,
+`DISPLAY` and `WAYLAND_DISPLAY` are all set.
+
+Plasma's system tray renders StatusNotifierItems, and clipit's tray icon is XEmbed, so
+the startup script also runs `xembedsniproxy`.
+It waits for plasmashell to own `org.kde.StatusNotifierWatcher` first.
+The tray icon is the way into the history: clipit's global hotkeys are X11 key grabs and
+fire only while an X11 window has focus.
+
+`INSTALL_CLIPIT=false` leaves it out of the image.
+`CLIPIT_AUTOSTART=false` keeps it installed and stops it starting with the session.
+
+
 ## desktop
 
 ### Flatpak apps in the KDE menu
@@ -181,6 +212,30 @@ Baking `XDG_DATA_DIRS` as container-wide env makes every process see it. It is
 idempotent: the profile.d snippet will not double-add paths already present, so login
 shells stay correct too. The order matches profile.d's own output — user install, system
 install, then base.
+
+### Claude Desktop
+
+Anthropic publishes the Linux desktop app as a `.deb` for Ubuntu and Debian only.
+Their [install
+documentation](https://code.claude.com/docs/en/desktop-linux) lists Fedora and RHEL as
+unsupported, so an apt repository is the only first-party route and this base cannot use
+it.
+
+The image installs `claude-desktop-unofficial` from `pkg.claude-desktop-debian.dev`.
+Since v3.0.0 that project repackages Anthropic's official Linux `.deb`; earlier versions
+converted the Windows installer.
+The package is named `-unofficial` so it can be installed alongside Anthropic's own
+`claude-desktop`, and it carries `Provides: claude-desktop`.
+The binary is `claude-desktop-unofficial`.
+
+`dnf -y makecache` is what imports the repository signing key.
+Without `-y` the import prompt is answered `N` in a build, `dnf` reports `repomd.xml GPG
+signature verification error: Signing key not found`, and exits 0 with unverified
+metadata cached.
+
+`INSTALL_CLAUDE_DESKTOP=false` leaves it out.
+Switch to Anthropic's own repository if they publish one for Fedora.
+
 
 ### NVIDIA proc overmount breaks flatpak
 

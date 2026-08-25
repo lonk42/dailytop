@@ -75,13 +75,14 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | `K9S_VERSION` | `0.51.0` | Not packaged in Fedora, so a pinned download |
 | `OC_VERSION` | `4.22.6` | OpenShift client, from `mirror.openshift.com` |
 | `ARGOCD_VERSION` | `3.4.6` | Not packaged in Fedora, so a pinned download |
+| `INSTALL_CLIPIT` | `true` | [Clipboard manager, started with the session](image-design.md#clipboard-history-with-clipit) |
 
 ### desktop
 
 | Arg | Default | Notes |
 |---|---|---|
 | `DESKTOP_PACKAGES` | *(empty)* | Extra packages for the desktop lineage; `flatpak` is installed regardless |
-| `INSTALL_CLAUDE_DESKTOP` | `true` | Third-party repo |
+| `INSTALL_CLAUDE_DESKTOP` | `true` | [Community RPM repackaging; Anthropic ships a `.deb` only](image-design.md#claude-desktop) |
 | `FLATPAKS` | `com.spotify.Client` | Empty installs none but keeps flatpak usable at runtime |
 | `ENABLE_LOCK_SCREEN` | `true` | Needs an account password to be openable — [why](image-design.md#the-kde-lock-screen) |
 | `INSTALL_ACCOUNT_HOOK` | `true` | [Sets `abc`/`root` passwords at start from `$USER_PASSWORD`](image-design.md#account-passwords) |

@@ -47,8 +47,8 @@ dailytop is a much fatter base including support for a larger variety of desktop
 
 | Target | What it is | Notable contents |
 |---|---|---|
-| `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu, yakuake; no flatpaks |
-| `desktop` | `base` + a full desktop session. | flatpak + Flathub, Spotify, claude-desktop, Firefox hardware decode |
+| `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu, yakuake, clipit; no flatpaks |
+| `desktop` | `base` + a full desktop session. | flatpak + Flathub, Spotify, Claude Desktop, Firefox hardware decode |
 | `full` | `desktop` + a workstation toolchain. | sshd, DinD, runtime password setup |
 | `k8s` | `desktop` + node-layout fixes for a cluster. | `vainfo`, the injected-driver symlink hooks, no sshd |
 | `coder` | A [Coder](https://coder.com) workspace. | `base` + the Coder agent as an s6 service; no flatpaks, no HTTP basic auth |
@@ -173,6 +173,7 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
 |---|---|---|
 | `USER_PASSWORD` | *(unset)* | Sets `abc`/`root` passwords at start. Required to unlock the lock screen |
 | `LOCK_ON_STARTUP` | `true` | Lock the session at start |
+| `CLIPIT_AUTOSTART` | `true` | Start the [clipboard manager](docs/image-design.md#clipboard-history-with-clipit) with the session |
 | `CA_CERT_DIR` | `/certs` | Where to load extra root CAs from |
 | `PRIVATE_REGISTRY` | *(empty)* | Registry `host[:port]` to trust from the inner DinD daemon |
 | `SSHD_CONFIG` | `/defaults/sshd_config` | Use your own sshd config |

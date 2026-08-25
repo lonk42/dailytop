@@ -45,6 +45,7 @@ services:
       - SELKIES_ENCODER=${SELKIES_ENCODER:-x264enc-striped,jpeg}
       - USER_PASSWORD=${USER_PASSWORD:?set USER_PASSWORD in .env (see .env.example)}
       # - LOCK_ON_STARTUP=false
+      # - CLIPIT_AUTOSTART=false
       # Registry host[:port] using a private CA. See certs/README.md.
       # - PRIVATE_REGISTRY=registry.example.com
 

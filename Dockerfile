@@ -332,6 +332,52 @@ RUN DE_RUN=/etc/s6-overlay/s6-rc.d/svc-de/run && \
 	[ "$(grep -cF 'svc-selkies' "$DE_RUN")" = "4" ] && \
 	bash -n "$DE_RUN"
 
+# clipit is a clipboard manager; nothing in this session reads /etc/xdg/autostart, so its
+# packaged autostart entry never fires. docs/image-design.md#clipboard-history-with-clipit
+ARG INSTALL_CLIPIT=true
+
+RUN if [ "${INSTALL_CLIPIT}" = "true" ]; then dnf install -y clipit && dnf clean all; fi
+
+# Backgrounded from startwm's own bash -c block below, the only place the session bus,
+# DISPLAY and WAYLAND_DISPLAY are all set. docs/image-design.md#clipboard-history-with-clipit
+RUN cat > /clipit-startup.sh <<'EOF'
+#!/bin/bash
+[ "${CLIPIT_AUTOSTART:-true}" = "true" ] || { echo "[clipit-startup] disabled via CLIPIT_AUTOSTART"; exit 0; }
+command -v clipit >/dev/null 2>&1 || exit 0
+# clipit reads the clipboard through Xwayland, so wait for the X server, not the compositor.
+for _ in $(seq 1 60); do
+  xdotool getdisplaygeometry >/dev/null 2>&1 && break
+  sleep 1
+done
+# Plasma renders only StatusNotifierItems, and clipit's tray icon is XEmbed. The proxy has
+# nothing to register against until plasmashell owns the watcher, so wait for it out of line.
+{
+  for _ in $(seq 1 60); do
+    if dbus-send --session --print-reply --dest=org.freedesktop.DBus \
+         /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner \
+         string:org.kde.StatusNotifierWatcher >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  pgrep -x xembedsniproxy >/dev/null 2>&1 || xembedsniproxy
+} &
+exec env GDK_BACKEND=x11 clipit
+EOF
+
+RUN if [ "${INSTALL_CLIPIT}" = "true" ]; then \
+		chmod 0755 /clipit-startup.sh && \
+		bash -n /clipit-startup.sh && \
+		[ "$(grep -c 'WAYLAND_DISPLAY=wayland-0 plasmashell' /defaults/startwm_wayland.sh)" = "2" ] && \
+		! grep -q 'clipit-startup' /defaults/startwm_wayland.sh && \
+		sed -i 's|\( *\)WAYLAND_DISPLAY=wayland-0 plasmashell|\1bash /clipit-startup.sh \&\n\1WAYLAND_DISPLAY=wayland-0 plasmashell|' \
+			/defaults/startwm_wayland.sh && \
+		[ "$(grep -c 'bash /clipit-startup.sh &' /defaults/startwm_wayland.sh)" = "2" ] && \
+		bash -n /defaults/startwm_wayland.sh; \
+	else \
+		rm -f /clipit-startup.sh; \
+	fi
+
 
 # =============================================================================
 #  desktop -- lock screen, flatpak machinery, flatpak apps
@@ -342,7 +388,9 @@ FROM base AS desktop
 
 # Empty by default; `flatpak` is installed unconditionally alongside it below.
 ARG DESKTOP_PACKAGES=""
-# Own switch because it needs a third-party repo.
+# Own switch because it needs a third-party repo: Anthropic publishes the Linux app as a
+# .deb only, so a Fedora base needs the community repackaging of it.
+# docs/image-design.md#claude-desktop
 ARG INSTALL_CLAUDE_DESKTOP=true
 # Application IDs, space-separated. Empty still leaves flatpak usable at runtime.
 ARG FLATPAKS="com.spotify.Client"
@@ -356,10 +404,10 @@ ARG ENABLE_NVIDIA_FLATPAK_GL=true
 
 RUN if [ "${INSTALL_CLAUDE_DESKTOP}" = "true" ]; then \
 		dnf install -y dnf-plugins-core && \
-		curl -fsSL https://pkg.claude-desktop-debian.dev/rpm/claude-desktop.repo \
-			-o /etc/yum.repos.d/claude-desktop.repo && \
-		dnf makecache && \
-		dnf install -y claude-desktop; \
+		curl -fsSL https://pkg.claude-desktop-debian.dev/rpm/claude-desktop-unofficial.repo \
+			-o /etc/yum.repos.d/claude-desktop-unofficial.repo && \
+		dnf -y makecache && \
+		dnf install -y claude-desktop-unofficial; \
 	fi && \
 	dnf install -y flatpak ${DESKTOP_PACKAGES} && \
 	flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo && \
