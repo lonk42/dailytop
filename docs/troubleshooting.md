@@ -759,75 +759,86 @@ Keep that subnet and `DIND_ADDRESS_POOL` apart, or the fix becomes the bug.
 
 ## Stuck modifier key
 
-**Symptom:** the desktop behaves as if a modifier is permanently held — clicks
-rubber-band-select (Shift), shortcuts fire (Ctrl), menus no-op (Alt), or everything
-types uppercase (Shift *or* Caps Lock) — and the user cannot release it from the browser.
+**Symptom:** the desktop behaves as if a modifier is held.
+Clicks rubber-band-select (Shift), shortcuts fire (Ctrl), menus no-op (Alt), or every
+letter types uppercase.
+Tapping the key in the browser, clicking away from the stream and reloading the tab all
+leave it held.
 
-**Diagnose before injecting anything: there are two faults with opposite fixes**, and a
-latched Caps Lock is indistinguishable from a stuck Shift by symptom alone. Read the
-real modifier mask off the X server:
-
-```bash
-export XDG_RUNTIME_DIR=/config/.XDG DISPLAY=:0   # probe the display first, see below
-/lsiopy/bin/python3 -c "
-from Xlib import display
-d=display.Display()
-m=d.screen().root.query_pointer().mask
-names=['Shift','Lock','Control','Mod1(Alt)','Mod2(Num)','Mod3','Mod4(Super)','Mod5(AltGr)']
-print('mask=0x%x' % m, [n for i,n in enumerate(names) if m & (1<<i)])
-"
-```
-
-- `Lock` set (`mask=0x2`) ⇒ **Caps Lock is latched.** The fix is a *single toggling
-  press*: `xdotool key Caps_Lock`. The down→up cycle below **will not fix this**, and
-  loops that defensively skip lock keys skip the only key that is actually stuck.
-- Anything else ⇒ a genuine stuck modifier; use the down→up cycle.
-
-Use this mask, **not** `xdotool getmodifiers` — the latter returned empty output (exit
-1) while `Lock` was demonstrably set. `xmodmap -pm` also prints an empty modifier map
-here, so it is no help either.
-
-**Mental model:** in this stack kwin gets **all** input via the **libei/EIS portal from
-selkies**. kwin holds a `/memfd:eis keymap` fd and **no `/dev/input/event*` fds at all**
-(check `ls -l /proc/<kwin-pid>/fd`). Consequences:
-
-- Host input devices visible inside a privileged container are a **red herring** —
-  their keystrokes do not flow into this session through evdev.
-- The stuck modifier is latched in **kwin's per-seat xkb state**, on the EIS keyboard
-  **selkies owns**. Browser key-taps and full page reloads don't clear it, because
-  selkies keeps that EIS device alive across websocket reconnects.
-
-**The fix (non-destructive, no restarts):** Xwayland here runs with
-`-enable-ei-portal`, so **XTEST synthetic input is forwarded into kwin's Wayland seat
-over EIS**, and kwin's xkb state is per-seat and keyed by keycode, not by device. A bare
-`xdotool keyup` does nothing (X emits no release for a key it thinks is already up), so
-send a real **down→up cycle**:
+**Fix:** send `kr` on the selkies websocket.
 
 ```bash
-export XDG_RUNTIME_DIR=/config/.XDG DISPLAY=:0
-for k in Alt_L Alt_R Control_L Control_R Shift_L Shift_R Super_L Super_R Meta_L ISO_Level3_Shift; do
-  xdotool keydown "$k"; xdotool keyup "$k"
-done
+/lsiopy/bin/python3 - <<'PY'
+import asyncio, websockets
+async def main():
+    async with websockets.connect("ws://127.0.0.1:8082/websockets") as ws:
+        await ws.send("kr")
+        await asyncio.sleep(0.5)
+asyncio.run(main())
+PY
 ```
 
-Then re-read the mask to confirm (`0x0` means the latch is gone). That check is
-authoritative for the X side; the Wayland seat is not directly observable, so have the
-user test in the stream too. `wtype` cannot help — kwin disables the Wayland
-virtual-keyboard protocol (`Compositor does not support the virtual keyboard protocol`).
+`kr` reaches `reset_keyboard()` in selkies' `input_handler.py`, which injects a key-up for
+each of Ctrl, Shift, Alt, Meta and AltGr directly into the Wayland seat.
+Caps Lock (keysym `65509`) is not in that list, so `kr` leaves it latched; toggle it with a
+`kd,65509` then `ku,65509` pair on the same socket.
+
+**Trigger:** a paste large enough to raise an application's paste confirmation dialog.
+Konsole pastes on `Ctrl+Shift+V` and asks before a large one; the dialog takes focus while
+Shift is still down, so the browser never sends the `keyup`.
+
+**Why the browser cannot clear it afterwards:** the selkies client discards a keyup for any
+key it is not already tracking as down.
+
+```javascript
+if(!(t in this._keyDownList)) return;      // selkies-core.js, _sendKeyEvent
+```
+
+The dialog clears `_keyDownList` while the server still holds the modifier, so every later
+tap of that key is dropped before it reaches the wire.
+`resetKeyboard()` is bound to window `blur`, and replays only `_keyDownList`.
+
+**The X modifier mask is not a valid check.**
+Xwayland receives modifier updates only while an X11 client holds keyboard focus, so with a
+Wayland application focused the mask freezes at its last value.
+It has read `0x1` on a session that was already clear, and `0x0` on one that was still
+stuck.
+Read the case of a typed character instead.
+
+**What does not work:**
+
+- **XTEST, so `xdotool` and `xmodmap`.**
+  Xwayland runs here without `-enable-ei-portal`
+  (`tr '\0' ' ' < /proc/$(pgrep -x Xwayland)/cmdline`), so synthetic input reaches only
+  Xwayland's own clients.
+  Konsole, Plasma and every other Wayland-native application never see it.
+- **pixelflux `computer_use` `key` and `hold_key`.**
+  Both answer `{"result":"ok"}` without landing.
+  Only `type` reaches the session, and it does not change modifier state.
+- **kwin's keyboard configuration.**
+  The keymap comes from selkies' virtual keyboard, so kwin ignores layouts added to
+  `kxkbrc`, and neither `switchToNextLayout` nor `reconfigure` clears the latch.
+- **`wtype`.**
+  kwin disables the Wayland virtual-keyboard protocol
+  (`Compositor does not support the virtual keyboard protocol`).
+
+Host input devices visible inside a privileged container are a red herring.
+kwin holds a `/memfd:eis keymap` fd and no `/dev/input/event*` fds
+(`ls -l /proc/$(pgrep -x kwin_wayland)/fd`), so their keystrokes never enter the session.
 
 ---
 
 ## The X display number changes between base versions
 
-**Always probe; never assume.** It decides whether any `xdotool`/XTEST recovery works at
-all, and it has genuinely differed between LinuxServer releases — `:1` on some (where
-`:0` is unreachable), `:0` on others (where `startwm_wayland.sh` does
-`unset DISPLAY; export DISPLAY=:0`). Both were true at different times, so a flat claim
-either way is a trap.
+**Always probe; never assume.**
+The number has differed between LinuxServer releases: `:1` on some (where `:0` is
+unreachable), `:0` on others (where `startwm_wayland.sh` does
+`unset DISPLAY; export DISPLAY=:0`).
+Both were true at different times, so a flat claim either way is a trap.
 
 ```bash
 pgrep -af Xwayland                  # the ":N" it was started with is authoritative
-for d in :0 :1; do DISPLAY=$d xdpyinfo >/dev/null 2>&1 && echo "$d live"; done
+for d in :0 :1; do DISPLAY=$d xdpyinfo >/dev/null 2>&1 && echo "$d live"; done  # xdpyinfo is absent from some bases
 ```
 
 Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`.

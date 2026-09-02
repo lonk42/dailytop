@@ -27,7 +27,7 @@ FROM ${WEBTOP_BASE_IMAGE} AS base
 ARG BASE_PACKAGES="vim git tmux htop rsync net-tools iproute firefox chromium sqlite \
 sshfs telnet spectacle unzip npm awscli2 dos2unix dejavu-fonts-all ripgrep figlet \
 kolourpaint ImageMagick strace gh jq yq bind-utils iputils wget helm kubectl \
-azure-cli opentofu kustomize rclone restic s3cmd yakuake python3-dbus"
+azure-cli opentofu kustomize rclone restic s3cmd yakuake python3-dbus libadwaita"
 # Own switches because these need vendor repos, not Fedora's.
 ARG INSTALL_VSCODE=true
 ARG INSTALL_GCLOUD=true
