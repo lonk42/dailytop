@@ -33,6 +33,10 @@ dailytop is a much fatter base including support for a larger variety of desktop
 - **A KDE lock screen**, optionally engaged at session start and unlocked with an
   account password applied at container start.
   [Detail](docs/image-design.md#the-kde-lock-screen)
+- **Konsole session restore.** Tabs, splits, working directories and scrollback are
+  snapshotted on a timer and rebuilt when Konsole next opens, so a container restart does
+  not cost the terminals.
+  [Detail](docs/image-design.md#konsole-session-restore-with-kontinue)
 - **A cloud and Kubernetes toolkit** in `base`, inherited by every variant: aws, az and
   gcloud; kubectl, helm, oc, k9s and argocd; Terraform and OpenTofu; kustomize, rclone,
   restic and s3cmd; VS Code, Firefox and Chromium.
@@ -47,7 +51,7 @@ dailytop is a much fatter base including support for a larger variety of desktop
 
 | Target | What it is | Notable contents |
 |---|---|---|
-| `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu, yakuake, clipit; no flatpaks |
+| `base` | Upstream fixes, the CLI toolkit, VS Code. | Firefox, Chromium, gh, aws/az/gcloud, helm, kubectl, oc, k9s, argocd, Terraform/OpenTofu, yakuake, clipit, kontinue; no flatpaks |
 | `desktop` | `base` + a full desktop session. | flatpak + Flathub, Spotify, Claude Desktop, Firefox hardware decode |
 | `full` | `desktop` + a workstation toolchain. | sshd, DinD, runtime password setup |
 | `k8s` | `desktop` + node-layout fixes for a cluster. | `vainfo`, the injected-driver symlink hooks, no sshd |
@@ -174,6 +178,8 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
 | `USER_PASSWORD` | *(unset)* | Sets `abc`/`root` passwords at start. Required to unlock the lock screen |
 | `LOCK_ON_STARTUP` | `true` | Lock the session at start |
 | `CLIPIT_AUTOSTART` | `true` | Start the [clipboard manager](docs/image-design.md#clipboard-history-with-clipit) with the session |
+| `KONTINUE_AUTOSTART` | `true` | Start [Konsole session restore](docs/image-design.md#konsole-session-restore-with-kontinue) with the session |
+| `KONTINUE_INTERVAL` | `45` | Seconds between snapshots, and so how much a restart can lose |
 | `CA_CERT_DIR` | `/certs` | Where to load extra root CAs from |
 | `PRIVATE_REGISTRY` | *(empty)* | Registry `host[:port]` to trust from the inner DinD daemon |
 | `SSHD_CONFIG` | `/defaults/sshd_config` | Use your own sshd config |

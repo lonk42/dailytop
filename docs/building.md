@@ -76,6 +76,8 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 | `OC_VERSION` | `4.22.6` | OpenShift client, from `mirror.openshift.com` |
 | `ARGOCD_VERSION` | `3.4.6` | Not packaged in Fedora, so a pinned download |
 | `INSTALL_CLIPIT` | `true` | [Clipboard manager, started with the session](image-design.md#clipboard-history-with-clipit) |
+| `INSTALL_KONTINUE` | `true` | [Konsole session restore, started with the session](image-design.md#konsole-session-restore-with-kontinue) |
+| `KONTINUE_VERSION` | `0.1.1` | Git tag of [konsole-kontinue](https://github.com/lonk42/konsole-kontinue) to install |
 
 ### desktop
 

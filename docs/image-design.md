@@ -197,6 +197,52 @@ fire only while an X11 window has focus.
 `INSTALL_CLIPIT=false` leaves it out of the image.
 `CLIPIT_AUTOSTART=false` keeps it installed and stops it starting with the session.
 
+### Konsole session restore with kontinue
+
+[konsole-kontinue](https://github.com/lonk42/konsole-kontinue) saves Konsole's tabs,
+splits, working directories and scrollback, and rebuilds them when Konsole next opens.
+A container desktop is restarted for reasons that have nothing to do with the work in it
+— an image bump, a node drain, a compose edit — and the terminals are what that costs.
+`kontinue watch` runs for the session: it snapshots on a timer, and restores when the
+first Konsole appears.
+
+It is installed from a pinned git tag with `--no-deps`.
+Its two dependencies, `dbus-python` and `PyGObject`, are on PyPI as source only and would
+pull the dbus, glib, girepository and cairo headers into the image to build; Fedora ships
+both built, as `python3-dbus` and `python3-gobject`.
+The install runs `/usr/bin/python3` by path rather than `python3`, which is selkies'
+virtualenv — first on `PATH` in this base, and not where a desktop tool belongs.
+
+**Scrollback is only saved when Konsole writes it to a file**, which is the unlimited
+history setting.
+Konsole's compiled-in default keeps 1000 lines in memory and none on disk, so with it a
+snapshot silently stores nothing.
+The image ships `/usr/share/konsole/dailytop.profile` with `HistoryMode=2` and names it
+in `/etc/xdg/konsolerc`.
+Both are the system-wide layer of the XDG search: a profile in `/config` and a
+`DefaultProfile` in the user's own `konsolerc` still win.
+Unlimited history is also unbounded disk in `~/.cache/konsole` for as long as a pane
+lives, which is the trade the feature is.
+
+Nothing in this session reads `~/.config/autostart`, so `kontinue install` writes an
+entry that never fires — the same gap that leaves [clipit](#clipboard-history-with-clipit)
+to `startwm_wayland.sh`, and kontinue is backgrounded from that same `bash -c` block.
+The block is redirected to `/dev/null`, so the startup script sends the watcher's log,
+which is its whole account of what it saved and restored, to
+`$XDG_STATE_HOME/kontinue/watch.log`.
+It also exports `WAYLAND_DISPLAY`, which the session does not: a restore launches Konsole
+from the watcher, and it inherits whatever the watcher has.
+
+**Leave Konsole's "run all windows in a single process" alone.** Konsole registers
+`org.kde.konsole-<pid>` per process, which is what kontinue discovers, and a
+single-instance Konsole registers `org.kde.konsole` with no pid — invisible to it.
+Restores are unaffected either way, since `kontinue restore` launches `konsole --separate`.
+
+`INSTALL_KONTINUE=false` leaves out the tool, the profile and the `konsolerc` default.
+`KONTINUE_AUTOSTART=false` keeps it installed and stops the watcher starting with the
+session; `KONTINUE_INTERVAL` is the snapshot period in seconds, and so is how much a
+restart can lose.
+
 
 ## desktop
 

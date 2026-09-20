@@ -378,6 +378,74 @@ RUN if [ "${INSTALL_CLIPIT}" = "true" ]; then \
 		rm -f /clipit-startup.sh; \
 	fi
 
+# kontinue brings Konsole's tabs, splits and scrollback back after a restart; nothing
+# else in this session outlives one. docs/image-design.md#konsole-session-restore-with-kontinue
+ARG INSTALL_KONTINUE=true
+ARG KONTINUE_VERSION=0.1.1
+
+# --no-deps: the bindings come from Fedora, where they are built; from PyPI they are not
+# wheels and would need the dbus, glib, girepository and cairo headers.
+# /usr/bin/python3 by path: `python3` is selkies' virtualenv, which is first on PATH.
+RUN if [ "${INSTALL_KONTINUE}" = "true" ]; then \
+		dnf install -y python3-pip python3-dbus python3-gobject && \
+		dnf clean all && \
+		/usr/bin/python3 -m pip install --no-cache-dir --no-deps \
+			"konsole-kontinue @ https://github.com/lonk42/konsole-kontinue/archive/refs/tags/${KONTINUE_VERSION}.tar.gz" && \
+		/usr/bin/python3 -c 'from kontinue import watch' && \
+		kontinue --help > /dev/null; \
+	fi
+
+# kontinue can only save scrollback Konsole has written to a file, which is the unlimited
+# setting; Konsole's compiled-in default keeps 1000 lines in memory and none on disk.
+RUN mkdir -p /usr/share/konsole
+RUN cat > /usr/share/konsole/dailytop.profile <<'EOF'
+[General]
+Name=dailytop
+Parent=FALLBACK/
+
+[Scrolling]
+HistoryMode=2
+EOF
+
+# Konsole resolves the profile from XDG_DATA_DIRS and the default name from XDG_CONFIG_DIRS,
+# so a user profile in /config still wins.
+RUN if [ "${INSTALL_KONTINUE}" = "true" ]; then \
+		grep -q '^\[FileLocation\]$' /etc/xdg/konsolerc && \
+		! grep -q 'DefaultProfile' /etc/xdg/konsolerc && \
+		printf '\n[Desktop Entry]\nDefaultProfile=dailytop.profile\n' >> /etc/xdg/konsolerc && \
+		grep -q '^DefaultProfile=dailytop.profile$' /etc/xdg/konsolerc; \
+	else \
+		rm -f /usr/share/konsole/dailytop.profile; \
+	fi
+
+# Backgrounded from startwm's own bash -c block below, as clipit is: nothing here reads
+# ~/.config/autostart, so `kontinue install` writes an entry that never fires.
+RUN cat > /kontinue-startup.sh <<'EOF'
+#!/bin/bash
+[ "${KONTINUE_AUTOSTART:-true}" = "true" ] || { echo "[kontinue-startup] disabled via KONTINUE_AUTOSTART"; exit 0; }
+command -v kontinue >/dev/null 2>&1 || exit 0
+# The session exports no WAYLAND_DISPLAY, and a restore launches Konsole from here.
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+# The whole bash -c block is redirected to /dev/null, and the watcher's log is the only
+# account of what it saved or restored.
+STATE="${XDG_STATE_HOME:-${HOME}/.local/state}/kontinue"
+mkdir -p "${STATE}"
+exec kontinue watch --interval "${KONTINUE_INTERVAL:-45}" > "${STATE}/watch.log" 2>&1
+EOF
+
+RUN if [ "${INSTALL_KONTINUE}" = "true" ]; then \
+		chmod 0755 /kontinue-startup.sh && \
+		bash -n /kontinue-startup.sh && \
+		[ "$(grep -c 'WAYLAND_DISPLAY=wayland-0 plasmashell' /defaults/startwm_wayland.sh)" = "2" ] && \
+		! grep -q 'kontinue-startup' /defaults/startwm_wayland.sh && \
+		sed -i 's|\( *\)WAYLAND_DISPLAY=wayland-0 plasmashell|\1bash /kontinue-startup.sh \&\n\1WAYLAND_DISPLAY=wayland-0 plasmashell|' \
+			/defaults/startwm_wayland.sh && \
+		[ "$(grep -c 'bash /kontinue-startup.sh &' /defaults/startwm_wayland.sh)" = "2" ] && \
+		bash -n /defaults/startwm_wayland.sh; \
+	else \
+		rm -f /kontinue-startup.sh; \
+	fi
+
 
 # =============================================================================
 #  desktop -- lock screen, flatpak machinery, flatpak apps
