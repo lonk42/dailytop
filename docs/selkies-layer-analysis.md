@@ -2,6 +2,8 @@
 
 *Research note, 2026-07-24. Measured against `lscr.io/linuxserver/webtop:fedora-kde-37cda392-ls286` (built 2026-07-21) and selkies `main` @ `12f5033`.*
 
+*Superseded in part from `ls295` (2026-09-23): the base builds selkies from the `2.0.0` release tag of `selkies-project/selkies` rather than the `lsio` branch, with pixelflux and pcmflux `2.1.0` from PyPI. Section 3 describes the `lsio` era.*
+
 Question this answers: the webtop layer keeps us behind on selkies — how much is it
 actually implementing, and is it worth carrying?
 

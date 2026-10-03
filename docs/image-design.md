@@ -120,52 +120,24 @@ it from startwm's own export.
 It lives in `base` so every variant benefits. The lock-screen half of the same upstream
 line is patched separately in `desktop`, which is why both stages grep for it.
 
-### The selkies patch
-
-A temporary patch for leaked monitor tasks and a blocking `nvidia-smi` on the asyncio
-event loop. It is what makes a long-lived desktop degrade. Full detail, measurements and
-the exact delete-check in [upstream patches carried
-here](troubleshooting.md#upstream-patches-carried-here-and-when-to-delete-them).
-
 ### Defaults for selkies range settings
 
-A selkies `range` setting holds two independent things: the bounds a client may choose
-between, and the value a client starts on.
-`SELKIES_FRAMERATE` sets only the bounds — `8-120` for a range, a bare `30` to lock it.
-The starting value is a separate constant in the setting definition
-(`meta['default_value']`, 60 for framerate) that no environment variable reaches.
+A selkies `range` setting holds the bounds a client may choose between and the value it starts on.
+Both go in the one variable, comma-separated: `SELKIES_FRAMERATE=8-120,30` allows 8 to 120 and starts at 30.
+A span alone keeps the stock starting value, clamped into the span, so `SELKIES_FRAMERATE=8-30` starts at 30.
+A bare number, `SELKIES_FRAMERATE=30`, locks the setting.
 
-So narrowing the bounds leaves the starting value outside them, and it is clamped to the
-nearest one.
-`SELKIES_FRAMERATE=8-30` starts every session at 30 — the value you were capping away
-from.
-Locking the setting to `30` does start there, at the cost of the slider.
+The range settings and their stock starting values:
 
-`SELKIES_<NAME>_DEFAULT` separates the two.
-It is read in the `range` branch of the settings parser, after the bounds are known, and
-applies to every range setting:
-
-| Variable | Bounds from | Stock default |
+| Variable | Stock span | Starts at |
 |---|---|---|
-| `SELKIES_FRAMERATE_DEFAULT` | `SELKIES_FRAMERATE` | 60 |
-| `SELKIES_H264_CRF_DEFAULT` | `SELKIES_H264_CRF` | 25 |
-| `SELKIES_VIDEO_BITRATE_DEFAULT` | `SELKIES_VIDEO_BITRATE` | 8 |
-| `SELKIES_JPEG_QUALITY_DEFAULT` | `SELKIES_JPEG_QUALITY` | 40 |
-| `SELKIES_PAINT_OVER_JPEG_QUALITY_DEFAULT` | `SELKIES_PAINT_OVER_JPEG_QUALITY` | 90 |
-| `SELKIES_H264_PAINTOVER_CRF_DEFAULT` | `SELKIES_H264_PAINTOVER_CRF` | 18 |
-| `SELKIES_H264_PAINTOVER_BURST_FRAMES_DEFAULT` | `SELKIES_H264_PAINTOVER_BURST_FRAMES` | 5 |
-
-The value is clamped into the bounds, so a locked setting still wins and an out-of-range
-default is a no-op rather than an error. A non-numeric value logs a warning and leaves
-the stock default in place. There is no matching CLI flag; upstream derives those from
-the setting definitions, and this is not one.
-
-The patch is a single insertion because all three consumers of a range default read the
-same dict: the server's own initial framerate, the `default` field in the
-`server_settings` payload the dashboard's slider initialises from, and the fallback used
-when a client sends no value for a setting. The guards assert the parse branch upstream
-still has, and that the file is unpatched — so re-running the build after upstream adds
-its own `_DEFAULT` handling fails rather than patching twice.
+| `SELKIES_FRAMERATE` | 8-240 | 60 |
+| `SELKIES_VIDEO_CRF` | 5-50 | 25 |
+| `SELKIES_VIDEO_BITRATE` | 100-1000000 | 8000 |
+| `SELKIES_JPEG_QUALITY` | 1-100 | 40 |
+| `SELKIES_PAINT_OVER_JPEG_QUALITY` | 1-100 | 90 |
+| `SELKIES_VIDEO_PAINTOVER_CRF` | 5-50 | 18 |
+| `SELKIES_VIDEO_PAINTOVER_BURST_FRAMES` | 1-30 | 5 |
 
 ### Clipboard history with clipit
 

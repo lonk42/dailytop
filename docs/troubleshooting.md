@@ -416,7 +416,7 @@ log repeats
 
 ```
 connect() failed (111: Connection refused) while connecting to upstream,
-upstream: "http://127.0.0.1:8082/websockets…"
+upstream: "http://127.0.0.1:8082/api/websockets…"
 ```
 
 **Cause:** nginx is fine — it serves the dashboard as static files and only needs selkies
@@ -771,7 +771,7 @@ leave it held.
 /lsiopy/bin/python3 - <<'PY'
 import asyncio, websockets
 async def main():
-    async with websockets.connect("ws://127.0.0.1:8082/websockets") as ws:
+    async with websockets.connect("ws://127.0.0.1:8082/api/websockets") as ws:
         await ws.send("kr")
         await asyncio.sleep(0.5)
 asyncio.run(main())
@@ -847,7 +847,7 @@ Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`
 
 ## Upstream patches carried here, and when to delete them
 
-The `Dockerfile` carries three patches that are **workarounds for upstream bugs, not
+The `Dockerfile` carries two patches that are **workarounds for upstream bugs, not
 choices**. All are guarded so **the build fails once the bug is gone** — that failure
 is the removal signal, not a regression. Do not "fix" a guard failure by loosening the
 guard.
@@ -857,95 +857,20 @@ category — deliberate behaviour changes, and they stay.)
 
 | # | Patch | Stage | Delete when |
 |---|-------|-------|-------------|
-| 1 | selkies monitor-task leak + blocking `nvidia-smi` | `base` | `lsio` picks up upstream `47d2c1346` — **the leak half only**, see below |
-| 2 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block waits on real readiness **and** checks `pactl` succeeded before stamping its lock |
-| 3 | `svc-de` restarts selkies rather than joining a stale capture | `base` | `svc-de/run` checks the socket belongs to a selkies that has not already bound a session |
+| 1 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block stops waiting on `/defaults/pid`, or follows `PULSE_RUNTIME_PATH` |
+| 2 | `svc-de` restarts selkies rather than joining a stale capture | `base` | `svc-de/run` checks the socket belongs to a selkies that has not already bound a session |
 
-### 1. selkies leaked monitor tasks
+### 1. audio sink setup
 
-selkies creates per-connection system/GPU/network monitor tasks as `self._X_task_ws` but
-cancels them via `locals()["_X_task_ws"]`, which is never true for an instance
-attribute. Every browser reconnect therefore leaks an immortal `while True` loop, each
-calling `GPUtil.getGPUs()` (a synchronous `nvidia-smi`, ~38 ms) **on the asyncio event
-loop**.
-
-Symptoms are a choppy stream, climbing reported latency (that number is a frame-ACK
-round trip, so it measures the blocked loop), and a flood of `Error reading Wayland
-clipboard` — which is `asyncio.wait_for` timing out against a **blocked loop**, not a
-slow compositor.
-
-The leak half is fixed upstream by **`47d2c1346`**. The `to_thread` half is **ours, not
-a backport** — `689a201ee` is commonly cited for it but is actually a cursor/latency
-commit and does not contain it, so no upstream merge will ever deliver that half. Both
-are still carried here because LinuxServer builds selkies from their own `lsio` branch,
-which has diverged from `main` — **bumping the LinuxServer pin alone does NOT pick these
-up.**
-ls286 through ls290 all pinned `a4aadef97`;
-ls291 is the first bump, to `348bc4f61`, and it carries two commits — a recording-socket passthrough and a client-side decode fallback — that leave both halves of this patch in place.
-See [selkies-layer-analysis.md](selkies-layer-analysis.md).
-
-**Applied at the creation site, deliberately.** The sed turns each task into a genuine
-per-connection local via chained assignment (`_x = self._x = asyncio.create_task(...)`),
-leaving upstream's `locals()` cleanup to work as written. The obvious alternative —
-rewriting the cleanup to `getattr(self, "_x_task_ws", None)` — is wrong with **two
-browser tabs open**: the instance attribute is overwritten by each new connection, so
-tab A disconnecting cancels tab B's monitors, leaking A's loop *and* silently killing
-the stats of a tab that is still connected. Verified by AST that all four creation sites
-and all four cleanup sites live in the same function (`ws_handler`), so the locals are
-in scope for `locals()`.
-
-Consequence for the guards: this patch **keeps** the `locals()` form and asserts it is
-still present *after* the sed. The removal signal is therefore either the `create_task`
-shape changing or the `locals()` cleanup disappearing.
-
-Upstream's own fix takes the same shape: `47d2c1346` binds a per-connection local,
-assigns it to `self._X_task_ws` on the following line, and drops the `locals()` lookups
-in favour of iterating those locals directly. So when `lsio` picks it up, the first
-guard stops matching `self._gpu_monitor_task_ws = asyncio.create_task(` and the build
-fails — which is the signal working as intended.
-
-```bash
-# Has the lsio fork caught up?
-# NOTE the direction: for `lsio...main`, ahead_by = commits main has that lsio LACKS
-# (how far lsio trails), and behind_by = lsio's own commits. The merge signal is
-# **ahead_by 0**, NOT behind_by 0 — an earlier version of this recipe had it inverted
-# and would never have fired. (As of 2026-08-11: ahead_by 99, behind_by 6.)
-curl -s https://api.github.com/repos/selkies-project/selkies/compare/lsio...main \
-  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['status'],'ahead_by',d['ahead_by'],'behind_by',d['behind_by'])"
-
-# Is the fix commit still absent from lsio?  (prints it if lsio still lacks it)
-curl -s https://api.github.com/repos/selkies-project/selkies/compare/lsio...main \
-  | python3 -c "import sys,json;[print(c['sha'][:9],c['commit']['message'].splitlines()[0]) for c in json.load(sys.stdin)['commits'] if c['sha'].startswith('47d2c1346')]"
-
-# What selkies commit does the base currently pin?
-curl -s https://raw.githubusercontent.com/linuxserver/docker-baseimage-selkies/fedora44/Dockerfile \
-  | grep -o 'selkies/archive/[0-9a-f]\{40\}'
-
-# Definitive: does the actual base image still have the bug?
-docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -c \
-  'F=$(ls /lsiopy/lib/python3.*/site-packages/selkies/selkies.py); \
-   echo "bug lookups (0 = fixed): $(grep -c "_task_ws\" in locals()" $F)"'
-```
-
-If that count is **0**, upstream's restructure has landed and the leak half is done.
-Delete the creation-site sed and the three guards that reference `create_task` and
-`locals()` — the first of them will otherwise fail the build.
-
-**Keep the `to_thread` sed and its count guard.** That half is ours; a count of 0 says
-nothing about it, and `47d2c1346` does not touch `GPUtil.getGPUs()`. Deleting the whole
-`RUN SELKIES_PY=...` block puts the blocking `nvidia-smi` back on the event loop with no
-guard left to notice.
-
-### 2. audio sink setup
-
-Upstream's `svc-selkies/run` treats pulseaudio's pidfile as readiness and stamps its
-once-only lock whether or not `pactl` succeeded, so a lost race means no audio for the
-life of the container. Full analysis:
+Upstream's `svc-selkies/run` waits for `/defaults/pid` with no timeout before it creates the sinks.
+With `PULSE_RUNTIME_PATH` set anywhere else, as the unprivileged variant requires, that file is never written and selkies never starts.
+Its readiness wait after the pidfile is 5 seconds, and a sink failure is not retried until selkies restarts.
+Full analysis:
 [no audio](#no-audio-the-output-sink-was-never-created).
 
-The whole block is replaced with `/usr/local/bin/selkies-audio-setup`. Three guards hold
-it to the exact upstream shape — the `# Default sink setup` comment, the
-`until [ -f /defaults/pid ]` loop, and the `touch /dev/shm/audio.lock` — so any rework
+The whole block is replaced with `/usr/local/bin/selkies-audio-setup`, which waits up to 60 seconds on `pactl info` against `PULSE_RUNTIME_PATH` and latches the lock only once `output.monitor` exists.
+Three guards hold it to the exact upstream shape, the `# Default sink setup` comment, the
+`until [ -f /defaults/pid ]` loop, and the `touch /dev/shm/audio.lock`, so any rework
 upstream fails the build.
 
 Check whether it can go:
@@ -955,12 +880,10 @@ docker run --rm --entrypoint sh lscr.io/linuxserver/webtop:fedora-kde-<newtag> -
   'sed -n "/^# Default sink setup$/,/^fi$/p" /etc/s6-overlay/s6-rc.d/svc-selkies/run'
 ```
 
-Delete the patch only if that block both waits on something that implies the socket is
-accepting (not the pidfile) **and** makes the `touch` conditional on the sinks existing.
-Fixing only the wait is not enough: the unconditional lock is what makes a failure
-permanent.
+Delete the patch only if the pidfile wait is gone or follows `PULSE_RUNTIME_PATH`.
+Upstream already checks `pactl info` and makes the `touch` conditional on both sinks loading.
 
-### 3. `svc-de` rebuilds the pair instead of joining a stale capture
+### 2. `svc-de` rebuilds the pair instead of joining a stale capture
 
 Upstream's `svc-de/run` treats the existence of selkies' compositor socket as permission
 to start, which cannot tell a fresh selkies from one that already bound its capture to

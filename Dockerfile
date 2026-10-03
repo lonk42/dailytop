@@ -15,7 +15,7 @@
 
 # Pinned, not rolling: the rolling tag relocates the session scripts these seds patch.
 # docs/image-design.md#the-base-pin
-ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-e46b460a-ls291
+ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-531f6f7b-ls296
 
 
 # =============================================================================
@@ -178,60 +178,6 @@ ENV CA_CERT_DIR=/certs
 RUN grep -q 'kwin_wayland --no-lockscreen --xwayland &' /defaults/startwm_wayland.sh && \
 	sed -i 's/kwin_wayland --no-lockscreen --xwayland/env -u DISPLAY kwin_wayland --no-lockscreen --xwayland/' /defaults/startwm_wayland.sh && \
 	grep -q 'env -u DISPLAY kwin_wayland --no-lockscreen --xwayland' /defaults/startwm_wayland.sh
-
-# TEMPORARY: patch selkies for leaked monitor tasks + a blocking nvidia-smi on the
-# asyncio loop. Together they are what makes a long-lived desktop degrade. DELETE this
-# block when the guards start failing -- that is the removal signal.
-# Detail + the exact delete-check: docs/troubleshooting.md#upstream-patches-carried-here-and-when-to-delete-them
-# NOTE: patched at the task *creation* site, not the cleanup. Chained assignment binds
-# a genuine per-connection local so upstream's `locals()` cleanup starts working as
-# written -- which is why the `locals()` form is deliberately KEPT and asserted after
-# the sed, unlike every other guard here. Rewriting the cleanup to `getattr(self, ...)`
-# instead would cancel the wrong tab's tasks; see the docs link above.
-RUN SELKIES_PY="$(ls /lsiopy/lib/python3.*/site-packages/selkies/selkies.py)" && \
-	grep -q 'self\._gpu_monitor_task_ws = asyncio\.create_task(' "$SELKIES_PY" && \
-	grep -q '_gpu_monitor_task_ws" in locals()' "$SELKIES_PY" && \
-	grep -q 'GPUtil\.getGPUs()' "$SELKIES_PY" && \
-	sed -i -E \
-		-e 's/self\.(_[a-z_]+_task_ws) = asyncio\.create_task\(/\1 = self.\1 = asyncio.create_task(/' \
-		-e 's/GPUtil\.getGPUs\(\)/await asyncio.to_thread(GPUtil.getGPUs)/g' \
-		"$SELKIES_PY" && \
-	[ "$(grep -c '_task_ws = self\._[a-z_]*_task_ws = asyncio\.create_task(' "$SELKIES_PY")" = "4" ] && \
-	[ "$(grep -c 'to_thread(GPUtil\.getGPUs)' "$SELKIES_PY")" = "3" ] && \
-	grep -q '_gpu_monitor_task_ws" in locals()' "$SELKIES_PY" && \
-	! grep -q 'GPUtil\.getGPUs()' "$SELKIES_PY" && \
-	/lsiopy/bin/python3 -m py_compile "$SELKIES_PY"
-
-# A selkies range setting carries a default that no environment variable reaches, so
-# narrowing the range leaves the default outside it and the client lands on a bound.
-# docs/image-design.md#defaults-for-selkies-range-settings
-RUN cat > /tmp/range-default <<'EOF'
-                    # A range only bounds the slider; SELKIES_<NAME>_DEFAULT is where it starts.
-                    range_default = os.environ.get(f'SELKIES_{name.upper()}_DEFAULT')
-                    if range_default is not None:
-                        try:
-                            setting.setdefault('meta', {})['default_value'] = int(range_default)
-                        except (ValueError, TypeError):
-                            logging.warning(f"Invalid SELKIES_{name.upper()}_DEFAULT '{range_default}'. Using system default.")
-                    meta_default = setting.get('meta', {}).get('default_value')
-                    if meta_default is not None:
-                        setting['meta']['default_value'] = max(processed_value[0], min(int(meta_default), processed_value[1]))
-EOF
-RUN SELKIES_SETTINGS_PY="$(ls /lsiopy/lib/python3.*/site-packages/selkies/settings.py)" && \
-	grep -q "^                        processed_value = (locked_val, locked_val)$" "$SELKIES_SETTINGS_PY" && \
-	grep -q "'default_value': 60" "$SELKIES_SETTINGS_PY" && \
-	! grep -q '_DEFAULT' "$SELKIES_SETTINGS_PY" && \
-	sed -i '/^                        processed_value = (locked_val, locked_val)$/r /tmp/range-default' \
-		"$SELKIES_SETTINGS_PY" && \
-	rm -f /tmp/range-default && \
-	grep -q "SELKIES_{name.upper()}_DEFAULT" "$SELKIES_SETTINGS_PY" && \
-	/lsiopy/bin/python3 -m py_compile "$SELKIES_SETTINGS_PY" && \
-	SELKIES_FRAMERATE=8-120 SELKIES_FRAMERATE_DEFAULT=30 /lsiopy/bin/python3 -c \
-		"import sys; sys.argv=[sys.argv[0]]; from selkies.settings import settings_ws as s, \
-		FINAL_SETTING_DEFINITIONS_WEBSOCKETS as D; \
-		fr = next(x for x in D if x['name'] == 'framerate'); \
-		assert s.framerate == (8, 120), s.framerate; \
-		assert fr['meta']['default_value'] == 30, fr['meta']"
 
 # The base discards pulseaudio's output, so a pulseaudio that will not start is invisible
 # -- and the sink setup below depends on it. --log-level=0 keeps this to errors only.
@@ -513,12 +459,12 @@ if [ -z "${DRIVER}" ]; then
   exit 0
 fi
 REF="org.freedesktop.Platform.GL.nvidia-${DRIVER//./-}"
-if flatpak info "${REF}" >/dev/null 2>&1; then
+if flatpak --system info "${REF}" >/dev/null 2>&1; then
   echo "[custom-init] nvidia flatpak GL ext ${REF} already present"
   exit 0
 fi
 echo "[custom-init] installing nvidia flatpak GL ext ${REF} (host driver ${DRIVER})"
-if flatpak install -y --noninteractive flathub "${REF}"; then
+if flatpak --system install -y --noninteractive flathub "${REF}"; then
   echo "[custom-init] installed ${REF}"
 else
   echo "[custom-init] WARNING: could not install ${REF}; flatpak GPU apps will have broken acceleration" >&2
@@ -965,7 +911,7 @@ exec "$BIN" --no-sandbox "$@"
 EOF
 RUN chmod 0755 /usr/local/bin/code && \
 	bash -n /usr/local/bin/code && \
-	for f in /usr/share/applications/code.desktop /usr/share/applications/code-url-handler.desktop; do \
+	for f in /usr/share/applications/com.microsoft.VSCode.desktop /usr/share/applications/com.microsoft.VSCode.UrlHandler.desktop; do \
 		grep -q '^Exec=/usr/share/code/code' "$f" && \
 		sed -i 's|^Exec=/usr/share/code/code|Exec=/usr/local/bin/code|' "$f" && \
 		! grep -q '^Exec=/usr/share/code/code' "$f" || exit 1; \

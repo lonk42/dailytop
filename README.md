@@ -40,10 +40,6 @@ dailytop is a much fatter base including support for a larger variety of desktop
 - **A cloud and Kubernetes toolkit** in `base`, inherited by every variant: aws, az and
   gcloud; kubectl, helm, oc, k9s and argocd; Terraform and OpenTofu; kustomize, rclone,
   restic and s3cmd; VS Code, Firefox and Chromium.
-- **Separable defaults for the stream quality settings.**
-  `SELKIES_FRAMERATE` and its siblings set the bounds a client may choose between;
-  `SELKIES_<NAME>_DEFAULT` sets where it starts.
-  [Detail](docs/image-design.md#defaults-for-selkies-range-settings)
 - **Customisable.** Package lists, flatpak lists, tool versions and the base image pin
   are all build args. [Detail](docs/building.md)
 
@@ -133,7 +129,7 @@ $EDITOR examples/coder-template/main.tf   # locals: namespace, image, ca_cert_se
 cd examples/coder-template && coder templates push dailytop
 ```
 
-Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls291-<version>` and
+Set `local.image` to `ghcr.io/lonk42/dailytop:coder-unpriv-ls296-<version>` and
 `local.unprivileged = true` on a cluster that forbids root containers. Behind an internal
 CA, `local.ca_cert_secret` is required — without it the agent's first curl fails `x509`
 and the workspace never reports healthy, with the desktop up the whole time.
@@ -184,7 +180,7 @@ Beyond [webtop's own variables](https://docs.linuxserver.io/images/docker-webtop
 | `PRIVATE_REGISTRY` | *(empty)* | Registry `host[:port]` to trust from the inner DinD daemon |
 | `SSHD_CONFIG` | `/defaults/sshd_config` | Use your own sshd config |
 | `SELKIES_ENCODER` | per variant | Ordered fallback list — [read this first](docs/troubleshooting.md#the-encoder-model-read-this-first) |
-| `SELKIES_<NAME>_DEFAULT` | per setting | Starting value for a range setting such as `SELKIES_FRAMERATE`, separate from its bounds — [detail](docs/image-design.md#defaults-for-selkies-range-settings) |
+| `SELKIES_FRAMERATE` | `8-240,60` | Span and starting value for a range setting, also `SELKIES_VIDEO_CRF` and others — [detail](docs/image-design.md#defaults-for-selkies-range-settings) |
 | `FIREFOX_DISABLE_AV1` | `false`, `true` on `k8s` | Forces YouTube to VP9, for cards with no AV1 decode block |
 | `MOZ_DISABLE_RDD_SANDBOX` | *(unset)* | Required for Firefox hardware decode; weakens its media-decoder sandbox |
 
@@ -212,11 +208,6 @@ same job for flatpak's bwrap; a variant with no flatpaks needs neither.
 These are defects in the base image and its selkies build rather than features of this
 one. They are documented so they can be dropped when upstream fixes them:
 
-- **A session that degrades over days.** Upstream selkies leaks a monitor task per
-  browser reconnect and calls `nvidia-smi` synchronously on the asyncio event loop.
-  Measured on one container after 11 days: ~32 leaked monitors, the event loop blocked
-  in 38 of 40 samples, choppy stream and clipboard timeouts.
-  [Detail](docs/troubleshooting.md#upstream-patches-carried-here-and-when-to-delete-them)
 - **A Docker-in-Docker service that breaks the desktop.** The base enables `svc-docker`
   but current Fedora bases ship no OCI runtime, so dockerd restart-loops and stacks a
   tmpfs on `/tmp` every 4 seconds until the session D-Bus socket is buried and flatpak

@@ -67,7 +67,7 @@ More in [build environment gotchas](troubleshooting.md#build-environment-gotchas
 
 | Arg | Default | Notes |
 |---|---|---|
-| `WEBTOP_BASE_IMAGE` | `lscr.io/linuxserver/webtop:fedora-kde-e46b460a-ls291` | Pinned deliberately, not rolling — see [the base pin](image-design.md#the-base-pin) |
+| `WEBTOP_BASE_IMAGE` | `lscr.io/linuxserver/webtop:fedora-kde-531f6f7b-ls296` | Pinned deliberately, not rolling — see [the base pin](image-design.md#the-base-pin) |
 | `BASE_PACKAGES` | *(the CLI toolkit — see the Dockerfile)* | From Fedora's repos |
 | `INSTALL_VSCODE` | `true` | Needs Microsoft's repo, hence its own switch |
 | `INSTALL_GCLOUD` | `true` | Needs Google's repo, hence its own switch; pulls `gcloud` and the GKE auth plugin, ~449 MB |
