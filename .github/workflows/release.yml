@@ -1,0 +1,166 @@
+# A version tag ("2.0.0", no `v` prefix) publishes a release:
+#
+#   - the image variants at ghcr.io/<owner>/dailytop (build-images.yml);
+#   - the Helm chart at oci://ghcr.io/<owner>/charts/dailytop (publish-chart.yml);
+#   - a GitHub release carrying the image references and digests, the install
+#     commands, and the chart and a Coder template pinned to this release as assets.
+#
+# The tag must match `version` in charts/dailytop/Chart.yaml, and `appVersion` must be
+# `<lsNNN>-<version>` for the Dockerfile's base pin. Both are checked, and the tests run,
+# before anything is pushed. Scheme: docs/releasing.md
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Chart.yaml
+        id: version
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          chart=$(sed -nE 's/^version: *"?([^"]*)"?/\1/p' charts/dailytop/Chart.yaml)
+          app=$(sed -nE 's/^appVersion: *"?([^"]*)"?/\1/p' charts/dailytop/Chart.yaml)
+          base=$(sed -n 's/^ARG WEBTOP_BASE_IMAGE=//p' Dockerfile | head -1)
+          suffix=$(printf '%s' "${base##*:}" | grep -oE 'ls[0-9]+$' || true)
+          ok=1
+          if [ "$chart" != "$tag" ]; then
+            echo "::error::Tag $tag does not match Chart.yaml version ($chart)"
+            ok=0
+          fi
+          if [ "$app" != "${suffix}-${tag}" ]; then
+            echo "::error::Chart.yaml appVersion is '$app', expected '${suffix}-${tag}' for base ${base##*:}"
+            ok=0
+          fi
+          [ "$ok" = 1 ] || exit 1
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  test:
+    uses: ./.github/workflows/test.yml
+
+  images:
+    needs: [check, test]
+    uses: ./.github/workflows/build-images.yml
+    permissions:
+      contents: read
+      packages: write
+
+  chart:
+    needs: [check, test]
+    uses: ./.github/workflows/publish-chart.yml
+    permissions:
+      contents: read
+      packages: write
+
+  release:
+    needs: [check, images, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      VARIANTS: ${{ needs.images.outputs.variants }}
+      IMAGE: ${{ needs.images.outputs.image }}
+      SUFFIX: ${{ needs.images.outputs.suffix }}
+      BASE: ${{ needs.images.outputs.base }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chart
+          path: dist
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Coder template pinned to this release
+        run: |
+          set -euo pipefail
+          from='image     = "registry.example.com/dailytop:coder"'
+          to="image     = \"$IMAGE:coder-$SUFFIX-$VERSION\""
+          grep -qF "$from" examples/coder-template/main.tf || {
+            echo "::error::examples/coder-template/main.tf no longer has: $from"
+            exit 1
+          }
+          sed "s|$from|$to|" examples/coder-template/main.tf > dist/coder-template.tf
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          owner="${OWNER,,}"
+          notes="$RUNNER_TEMP/notes.md"
+
+          {
+            echo '## Container images'
+            echo
+            for name in $(jq -r '.[].name' <<<"$VARIANTS"); do
+              ref="$IMAGE:$name-$SUFFIX-$VERSION"
+              digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
+              echo "\`$name\`"
+              echo
+              echo '```'
+              echo "$ref"
+              echo "$IMAGE@$digest"
+              echo '```'
+              echo
+            done
+            echo "Built from \`$BASE\`. Package page: $REPO_URL/pkgs/container/dailytop"
+            echo
+            echo '## Helm chart'
+            echo
+            echo '```sh'
+            echo "helm install desktop oci://ghcr.io/$owner/charts/dailytop --version $VERSION"
+            echo '```'
+            echo
+            echo "Deploys \`k8s-$SUFFIX-$VERSION\` by default; set \`image.variant\` to \`coder\` or \`coder-unpriv\` for the others."
+            echo "Values: [chart README]($REPO_URL/blob/$VERSION/charts/dailytop/README.md)."
+            echo "Package page: $REPO_URL/pkgs/container/charts%2Fdailytop"
+            echo
+            echo '## Coder'
+            echo
+            echo "\`coder-template.tf\` below is the [example template]($REPO_URL/blob/$VERSION/examples/coder-template/main.tf) with \`local.image\` set to \`$IMAGE:coder-$SUFFIX-$VERSION\`."
+            echo 'Set `namespace` and `ca_cert_secret`, then `coder templates push`.'
+            echo "For a cluster that forbids root containers, use \`coder-unpriv-$SUFFIX-$VERSION\` and set \`local.unprivileged = true\`."
+            echo
+            echo '## Docker'
+            echo
+            echo 'The `full` variant is not published; build it from this tag:'
+            echo
+            echo '```sh'
+            echo "git clone --branch $VERSION $REPO_URL && cd dailytop"
+            echo 'cp .env.example .env && $EDITOR .env'
+            echo './build.sh full'
+            echo 'docker compose up -d'
+            echo '```'
+            echo
+          } > "$notes"
+
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "dailytop $VERSION" \
+            --notes-file "$notes" \
+            --generate-notes \
+            dist/*

@@ -86,6 +86,8 @@ flatpak runtimes or NVIDIA hooks and needs nothing disabled afterwards. It also 
 
 ## Quick start
 
+The [releases page](https://github.com/lonk42/dailytop/releases) lists every version with its image digests, install commands and the chart.
+
 Access is **HTTPS on port 3001** in every case. On plain `:3000` the client refuses to
 start with `FATAL: Not in a secure context. WebCodecs require HTTPS.`
 

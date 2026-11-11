@@ -1,9 +1,18 @@
 # Releasing
 
-Pushing any git tag runs two workflows:
-[`build-images.yml`](../.github/workflows/build-images.yml) publishes the images, and
-[`publish-chart.yml`](../.github/workflows/publish-chart.yml) publishes the Helm chart.
-Tags carry **no `v` prefix** — tag `0.0.1`, not `v0.0.1`.
+Releases are listed on the [releases page](https://github.com/lonk42/dailytop/releases).
+Each one carries the image references and digests, the install commands for that version, and the chart and a pinned Coder template as assets with `SHA256SUMS`.
+
+To release:
+
+1. Set `version` in [`charts/dailytop/Chart.yaml`](../charts/dailytop/Chart.yaml) to the new version, and `appVersion` to `<lsNNN>-<version>` for the base pin, e.g. `ls296-2.1.0`.
+2. Commit, then tag that commit with the version. Tags carry **no `v` prefix**: `2.1.0`, not `v2.1.0`.
+3. Push the tag.
+
+The tag runs [`release.yml`](../.github/workflows/release.yml).
+It fails before publishing anything if the tag does not match `version`, if `appVersion` does not match, or if [`test.yml`](../.github/workflows/test.yml) fails.
+It then calls [`build-images.yml`](../.github/workflows/build-images.yml) and [`publish-chart.yml`](../.github/workflows/publish-chart.yml), and creates the GitHub release once both succeed.
+Only `X.Y.Z` tags trigger it.
 
 ## Images
 
@@ -34,22 +43,16 @@ will serve a node's stale cache under a pod that reports healthy —
 [the details](troubleshooting.md#build-environment-gotchas).
 
 The `coder` stage is released in both variants, and `k8s` in one; add another by
-appending it to `RELEASE_VARIANTS` in the workflow's `prepare` job. `workflow_dispatch`
+appending it to `RELEASE_VARIANTS` in `build-images.yml`'s `prepare` job. `workflow_dispatch`
 builds any single stage on demand, with an `unprivileged` checkbox and the option to skip
 the push.
 
 ## The chart
 
-The same tag publishes [`charts/dailytop`](../charts/dailytop/README.md) to
-`oci://ghcr.io/<owner>/charts/dailytop`, versioned with the git tag and stamped with
-appVersion `<lsNNN>-<version>` — `ls296-0.0.1`. The chart composes its default image tag
-from that appVersion and `image.variant`, so a chart pulled at `--version 0.0.1` deploys
-the images the same tag built, with nothing to keep in step by hand.
+The same tag publishes [`charts/dailytop`](../charts/dailytop/README.md) to `oci://ghcr.io/<owner>/charts/dailytop` at the version in `Chart.yaml`.
+The chart composes its default image tag from `appVersion` and `image.variant`, so a chart pulled at `--version 2.0.0` deploys the images the same tag built.
 
-Helm requires SemVer 2 for a chart version, which is stricter than a git tag or a Docker
-tag. A tag that is not SemVer fails the workflow before packaging.
-
-Pull requests touching `charts/**` lint the chart and render every
+Every pull request lints the chart and renders every
 `charts/dailytop/ci/*-values.yaml`. Each of those files is a deployment shape that has to
 keep working — the defaults, GPU, unprivileged — so add one alongside a feature rather
 than only documenting it.

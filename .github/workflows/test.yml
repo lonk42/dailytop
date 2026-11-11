@@ -1,0 +1,57 @@
+# Checks that need no image build: the chart, build.sh and the compose file.
+#
+# Runs on pull requests, and from release.yml before anything is published.
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CHART_DIR: charts/dailytop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          # Pinned: `latest` resolves through the GitHub API and is rate-limited.
+          version: v4.2.2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint the chart
+        run: helm lint "$CHART_DIR"
+
+      # Every ci/*-values.yaml is a shape the chart must keep rendering: the defaults,
+      # the GPU deployment, the unprivileged one.
+      - name: Render every values file
+        run: |
+          set -euo pipefail
+          for f in "$CHART_DIR"/ci/*-values.yaml; do
+            echo "::group::$f"
+            helm template smoke "$CHART_DIR" --values "$f"
+            echo "::endgroup::"
+          done
+
+      # The default image tag is composed from appVersion; this is the tag a chart
+      # release deploys, so it has to name an image the same release builds.
+      - name: Default image matches appVersion
+        run: |
+          set -euo pipefail
+          app=$(sed -nE 's/^appVersion: *"?([^"]*)"?/\1/p' "$CHART_DIR/Chart.yaml")
+          got=$(helm template smoke "$CHART_DIR" | sed -nE 's/^ *image: *"?([^"]*)"?$/\1/p' | head -1)
+          if [ "${got##*:}" != "k8s-${app}" ]; then
+            echo "::error::default image is '$got', expected tag 'k8s-${app}'"
+            exit 1
+          fi
+
+      - name: build.sh syntax
+        run: bash -n build.sh
+
+      - name: Compose file parses
+        run: |
+          cp .env.example .env
+          docker compose config --quiet

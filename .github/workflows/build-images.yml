@@ -1,9 +1,10 @@
----
 # Build dailytop image variants and push them to GHCR.
 #
+# Called by release.yml on a version tag, after the version check and tests pass.
+# `workflow_dispatch` builds a single stage on demand.
+#
 # Tags per build, both at the same digest: `dailytop:coder` (moving) and
-# `dailytop:coder-ls286-0.0.1` (immutable). Git tags carry no `v` prefix.
-# Scheme and rationale: README.md#releases
+# `dailytop:coder-ls296-2.0.0` (immutable). Scheme and rationale: docs/releasing.md
 #
 # A VARIANT is a stage plus the build args that define it, plus the tag name it
 # publishes under. Two variants can share a stage: `coder` and `coder-unpriv` are both
@@ -13,10 +14,20 @@
 # ADDING A VARIANT: append it to RELEASE_VARIANTS in the `prepare` job; the entitlement
 # and platforms are derived from the stage name.
 on:
-  push:
-    tags:
-      # `*` does not match `/`, and a slash is not legal in a Docker tag anyway.
-      - '*'
+  workflow_call:
+    outputs:
+      variants:
+        description: JSON list of the variants built
+        value: ${{ jobs.prepare.outputs.variants }}
+      image:
+        description: Image repository, without a tag
+        value: ${{ jobs.prepare.outputs.image }}
+      suffix:
+        description: The lsNNN component of the immutable tags
+        value: ${{ jobs.prepare.outputs.suffix }}
+      base:
+        description: The base image the variants were built from
+        value: ${{ jobs.prepare.outputs.base }}
   workflow_dispatch:
     inputs:
       target:

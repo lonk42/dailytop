@@ -1,19 +1,11 @@
 ---
-# Lint the Helm chart on every change to it, and publish it to GHCR as an OCI artifact
-# on a tag.
+# Publish the Helm chart to GHCR as an OCI artifact.
 #
-# The same git tag that builds the images publishes the chart, so a release is one tag:
-# `1.1.0` gives `oci://ghcr.io/<owner>/charts/dailytop:1.1.0` with appVersion
-# `ls286-1.1.0`, and the chart's default image tag then resolves to the images that tag
-# built. Scheme and rationale: docs/releasing.md
+# Called by release.yml on a version tag, after the version check and tests pass; the
+# packaged chart is also handed back as the `chart` artifact for the GitHub release.
+# Linting runs in test.yml. Scheme and rationale: docs/releasing.md
 on:
-  push:
-    tags:
-      - '*'
-  pull_request:
-    paths:
-      - 'charts/**'
-      - '.github/workflows/publish-chart.yml'
+  workflow_call:
   workflow_dispatch:
     inputs:
       push:
@@ -29,7 +21,7 @@ env:
   CHART_DIR: charts/dailytop
 
 jobs:
-  lint:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,30 +33,6 @@ jobs:
 
       - name: Lint
         run: helm lint "$CHART_DIR"
-
-      # Every ci/*-values.yaml is a shape the chart must keep rendering: the defaults,
-      # the GPU deployment, the unprivileged one.
-      - name: Render every values file
-        run: |
-          set -euo pipefail
-          helm template smoke "$CHART_DIR" > /dev/null
-          for f in "$CHART_DIR"/ci/*-values.yaml; do
-            echo "::group::$f"
-            helm template smoke "$CHART_DIR" --values "$f"
-            echo "::endgroup::"
-          done
-
-  publish:
-    needs: lint
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-        with:
-          # Pinned: `latest` resolves through the GitHub API and is rate-limited.
-          version: v4.2.2
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Plan the release
         id: plan
@@ -107,6 +75,12 @@ jobs:
             --version '${{ steps.plan.outputs.version }}' \
             --app-version '${{ steps.plan.outputs.app_version }}' \
             --destination dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chart
+          path: dist/*.tgz
+          if-no-files-found: error
 
       - name: Log in to GHCR
         if: github.event_name != 'workflow_dispatch' || inputs.push
