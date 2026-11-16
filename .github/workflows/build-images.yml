@@ -4,7 +4,7 @@
 # `workflow_dispatch` builds a single stage on demand.
 #
 # Tags per build, both at the same digest: `dailytop:coder` (moving) and
-# `dailytop:coder-ls296-2.0.0` (immutable). Scheme and rationale: docs/releasing.md
+# `dailytop:coder-ls305-2.1.0` (immutable). Scheme and rationale: docs/releasing.md
 #
 # A VARIANT is a stage plus the build args that define it, plus the tag name it
 # publishes under. Two variants can share a stage: `coder` and `coder-unpriv` are both

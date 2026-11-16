@@ -6,7 +6,7 @@ and it is off by default because it makes `PUID`/`PGID` inert and relaxes group
 permissions on paths the init scripts write.
 
 CI publishes this as its own variant, so you do not have to build it yourself:
-`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls296-<version>` (immutable —
+`dailytop:coder-unpriv` (moving) and `dailytop:coder-unpriv-ls305-<version>` (immutable —
 use this one). See [releasing.md](releasing.md).
 
 FIPS is a separate problem — see [FIPS](#fips) at the bottom.
@@ -109,7 +109,6 @@ anyway.
 | sink setup replaced by `selkies-audio-setup` (no pidfile wait) | Applied unconditionally and grep-guarded; see [pulseaudio](#pulseaudio) |
 | Chromium conf + a `code` wrapper | Applied unconditionally, and runtime-adaptive so a privileged container keeps its sandbox; see [Chromium and VS Code](#chromium-and-vs-code) |
 | nginx self-signs into `/run/ssl`, not `/config/ssl` | Applied unconditionally. A key left in the workspace volume by another uid is unreadable to this one, and nginx exits rather than start without it; see [image-design.md](image-design.md#tls-material-lives-in-run) |
-| `sudo` dropped from startwm's `/tmp/.X11-unix` setup | Applied unconditionally. `sudo` cannot elevate here, so Xwayland never gets a socket and every X11 app — Firefox first — fails with `cannot open display`; see [troubleshooting](troubleshooting.md#firefox-cannot-open-display-0) |
 | `user nginx;` dropped and the pid file moved to `/var/lib/nginx` | Neither works or matters without a root master; see [nginx as a non-root master](#nginx-as-a-non-root-master) |
 | Fedora's stock `server { listen 80; }` removed from `nginx.conf` | Applied unconditionally. Nothing routes to it, and binding it needs `CAP_NET_BIND_SERVICE` on any runtime that leaves `net.ipv4.ip_unprivileged_port_start` at 1024 — CRI-O does; see [image-design.md](image-design.md#the-stock-80-server-block) |
 
@@ -229,7 +228,7 @@ rather than as failures:
   sudoers is a worse idea than a cosmetic error. Where an *upstream* script reaches for
   `sudo` to do something the session user could do unaided, that is a bug here and the fix
   is to drop the `sudo` — see [Firefox: cannot open display
-  :0](troubleshooting.md#firefox-cannot-open-display-0), which is that case.
+  :0](troubleshooting.md#firefox-cannot-open-display-0) for the case that hit this.
 - **Gamepad emulation is unavailable.** `init-selkies-config` does
   `mkdir -pm1777 /dev/input` and `mknod .../js0`, which need `CAP_MKNOD`. Set
   `NO_GAMEPAD=1` in the deployment to skip the attempt and quieten the log.

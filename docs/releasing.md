@@ -5,7 +5,7 @@ Each one carries the image references and digests, the install commands for that
 
 To release:
 
-1. Set `version` in [`charts/dailytop/Chart.yaml`](../charts/dailytop/Chart.yaml) to the new version, and `appVersion` to `<lsNNN>-<version>` for the base pin, e.g. `ls296-2.1.0`.
+1. Set `version` in [`charts/dailytop/Chart.yaml`](../charts/dailytop/Chart.yaml) to the new version, and `appVersion` to `<lsNNN>-<version>` for the base pin, e.g. `ls305-2.1.0`.
 2. Commit, then tag that commit with the version. Tags carry **no `v` prefix**: `2.1.0`, not `v2.1.0`.
 3. Push the tag.
 
@@ -22,11 +22,11 @@ digest:
 | Tag | Moves? | Use for |
 |---|---|---|
 | `dailytop:coder` | yes | trying it out |
-| `dailytop:coder-ls296-0.0.1` | no | **deployments** |
+| `dailytop:coder-ls305-0.0.1` | no | **deployments** |
 | `dailytop:coder-unpriv` | yes | trying the unprivileged build |
-| `dailytop:coder-unpriv-ls296-0.0.1` | no | **unprivileged deployments** |
+| `dailytop:coder-unpriv-ls305-0.0.1` | no | **unprivileged deployments** |
 | `dailytop:k8s` | yes | trying the GPU build |
-| `dailytop:k8s-ls296-0.0.1` | no | **GPU deployments** |
+| `dailytop:k8s-ls305-0.0.1` | no | **GPU deployments** |
 
 A variant is a stage plus the build args that define it. `coder` and `coder-unpriv` are
 both `--target coder`, differing only by `UNPRIVILEGED` — see
@@ -35,7 +35,7 @@ never moves the tag another variant's deployments follow.
 
 The immutable form is `<variant>-<lsNNN>-<version>`, where `lsNNN` is the LinuxServer
 build number lifted from the base pin (`WEBTOP_BASE_IMAGE` →
-`fedora-kde-531f6f7b-ls296` → `ls296`) and the version is the git tag verbatim. The full
+`fedora-kde-cbf8546c-ls305` → `ls305`) and the version is the git tag verbatim. The full
 base reference is recorded as the `org.dailytop.base-image` label.
 
 Pin deployments to an immutable tag. A moving tag plus `imagePullPolicy: IfNotPresent`

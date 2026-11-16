@@ -15,7 +15,7 @@
 
 # Pinned, not rolling: the rolling tag relocates the session scripts these seds patch.
 # docs/image-design.md#the-base-pin
-ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-531f6f7b-ls296
+ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-cbf8546c-ls305
 
 
 # =============================================================================
@@ -284,7 +284,7 @@ ARG INSTALL_CLIPIT=true
 
 RUN if [ "${INSTALL_CLIPIT}" = "true" ]; then dnf install -y clipit && dnf clean all; fi
 
-# Backgrounded from startwm's own bash -c block below, the only place the session bus,
+# Backgrounded from startwm's start_session() below, the only place the session bus,
 # DISPLAY and WAYLAND_DISPLAY are all set. docs/image-design.md#clipboard-history-with-clipit
 RUN cat > /clipit-startup.sh <<'EOF'
 #!/bin/bash
@@ -295,8 +295,8 @@ for _ in $(seq 1 60); do
   xdotool getdisplaygeometry >/dev/null 2>&1 && break
   sleep 1
 done
-# Plasma renders only StatusNotifierItems, and clipit's tray icon is XEmbed. The proxy has
-# nothing to register against until plasmashell owns the watcher, so wait for it out of line.
+# Plasma renders only StatusNotifierItems, and clipit's tray icon is XEmbed. The base starts
+# the proxy before Xwayland is up, where it aborts; start it once X and the watcher exist.
 {
   for _ in $(seq 1 60); do
     if dbus-send --session --print-reply --dest=org.freedesktop.DBus \
@@ -314,11 +314,11 @@ EOF
 RUN if [ "${INSTALL_CLIPIT}" = "true" ]; then \
 		chmod 0755 /clipit-startup.sh && \
 		bash -n /clipit-startup.sh && \
-		[ "$(grep -c 'WAYLAND_DISPLAY=wayland-0 plasmashell' /defaults/startwm_wayland.sh)" = "2" ] && \
+		[ "$(grep -c '^  plasmashell &$' /defaults/startwm_wayland.sh)" = "1" ] && \
 		! grep -q 'clipit-startup' /defaults/startwm_wayland.sh && \
-		sed -i 's|\( *\)WAYLAND_DISPLAY=wayland-0 plasmashell|\1bash /clipit-startup.sh \&\n\1WAYLAND_DISPLAY=wayland-0 plasmashell|' \
+		sed -i 's|^\( *\)plasmashell &$|\1bash /clipit-startup.sh \&\n\1plasmashell \&|' \
 			/defaults/startwm_wayland.sh && \
-		[ "$(grep -c 'bash /clipit-startup.sh &' /defaults/startwm_wayland.sh)" = "2" ] && \
+		[ "$(grep -c '^  bash /clipit-startup.sh &$' /defaults/startwm_wayland.sh)" = "1" ] && \
 		bash -n /defaults/startwm_wayland.sh; \
 	else \
 		rm -f /clipit-startup.sh; \
@@ -364,15 +364,18 @@ RUN if [ "${INSTALL_KONTINUE}" = "true" ]; then \
 		rm -f /usr/share/konsole/dailytop.profile; \
 	fi
 
-# Backgrounded from startwm's own bash -c block below, as clipit is: nothing here reads
-# ~/.config/autostart, so `kontinue install` writes an entry that never fires.
+# Backgrounded from startwm's start_session() below, as clipit is. start_session() also runs
+# ~/.config/autostart, so a user's own `kontinue install` entry wins rather than run twice.
 RUN cat > /kontinue-startup.sh <<'EOF'
 #!/bin/bash
 [ "${KONTINUE_AUTOSTART:-true}" = "true" ] || { echo "[kontinue-startup] disabled via KONTINUE_AUTOSTART"; exit 0; }
 command -v kontinue >/dev/null 2>&1 || exit 0
-# The session exports no WAYLAND_DISPLAY, and a restore launches Konsole from here.
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
-# The whole bash -c block is redirected to /dev/null, and the watcher's log is the only
+# Two watchers would truncate and write the same log and both restore into one Konsole.
+if [ -f "${XDG_CONFIG_HOME:-${HOME}/.config}/autostart/kontinue-watch.desktop" ]; then
+  echo "[kontinue-startup] user autostart entry present; leaving the watcher to it"
+  exit 0
+fi
+# The whole session is redirected to /dev/null, and the watcher's log is the only
 # account of what it saved or restored.
 STATE="${XDG_STATE_HOME:-${HOME}/.local/state}/kontinue"
 mkdir -p "${STATE}"
@@ -382,11 +385,11 @@ EOF
 RUN if [ "${INSTALL_KONTINUE}" = "true" ]; then \
 		chmod 0755 /kontinue-startup.sh && \
 		bash -n /kontinue-startup.sh && \
-		[ "$(grep -c 'WAYLAND_DISPLAY=wayland-0 plasmashell' /defaults/startwm_wayland.sh)" = "2" ] && \
+		[ "$(grep -c '^  plasmashell &$' /defaults/startwm_wayland.sh)" = "1" ] && \
 		! grep -q 'kontinue-startup' /defaults/startwm_wayland.sh && \
-		sed -i 's|\( *\)WAYLAND_DISPLAY=wayland-0 plasmashell|\1bash /kontinue-startup.sh \&\n\1WAYLAND_DISPLAY=wayland-0 plasmashell|' \
+		sed -i 's|^\( *\)plasmashell &$|\1bash /kontinue-startup.sh \&\n\1plasmashell \&|' \
 			/defaults/startwm_wayland.sh && \
-		[ "$(grep -c 'bash /kontinue-startup.sh &' /defaults/startwm_wayland.sh)" = "2" ] && \
+		[ "$(grep -c '^  bash /kontinue-startup.sh &$' /defaults/startwm_wayland.sh)" = "1" ] && \
 		bash -n /defaults/startwm_wayland.sh; \
 	else \
 		rm -f /kontinue-startup.sh; \
@@ -552,7 +555,7 @@ RUN if [ "${INSTALL_ACCOUNT_HOOK}" = "true" ]; then \
 
 # Locking at session start has no ordinary path here -- no plasma-session, no logind --
 # so this helper drives the ScreenSaver DBus service from inside the session bus. It is
-# backgrounded from startwm's own bash -c block below, which is the only place
+# backgrounded from startwm's start_session() below, which is the only place
 # DBUS_SESSION_BUS_ADDRESS is set. Needs an account password to be openable.
 # docs/image-design.md#the-kde-lock-screen
 RUN cat > /lock-on-startup.sh <<'EOF'
@@ -590,8 +593,10 @@ RUN chmod 0755 /custom-cont-init.d/02-nvidia-proc-unmount.sh \
 		bash -n /lock-on-startup.sh && \
 		grep -q 'env -u DISPLAY kwin_wayland --no-lockscreen --xwayland' /defaults/startwm_wayland.sh && \
 		sed -i 's/kwin_wayland --no-lockscreen --xwayland/kwin_wayland --xwayland/' /defaults/startwm_wayland.sh && \
-		sed -i 's|\( *\)WAYLAND_DISPLAY=wayland-0 plasmashell|\1bash /lock-on-startup.sh \&\n\1WAYLAND_DISPLAY=wayland-0 plasmashell|' /defaults/startwm_wayland.sh && \
-		grep -q 'bash /lock-on-startup.sh &' /defaults/startwm_wayland.sh; \
+		[ "$(grep -c '^  plasmashell &$' /defaults/startwm_wayland.sh)" = "1" ] && \
+		sed -i 's|^\( *\)plasmashell &$|\1bash /lock-on-startup.sh \&\n\1plasmashell \&|' /defaults/startwm_wayland.sh && \
+		[ "$(grep -c '^  bash /lock-on-startup.sh &$' /defaults/startwm_wayland.sh)" = "1" ] && \
+		bash -n /defaults/startwm_wayland.sh; \
 	else \
 		rm -f /lock-on-startup.sh; \
 	fi
@@ -916,18 +921,6 @@ RUN chmod 0755 /usr/local/bin/code && \
 		sed -i 's|^Exec=/usr/share/code/code|Exec=/usr/local/bin/code|' "$f" && \
 		! grep -q '^Exec=/usr/share/code/code' "$f" || exit 1; \
 	done
-
-# startwm creates Xwayland's socket directory with sudo, which a non-root container cannot
-# use -- so Xwayland gets no socket, and the session's MOZ_ENABLE_WAYLAND=0 sends Firefox
-# to an X display that never came up. /tmp is 1777. docs/troubleshooting.md#firefox-cannot-open-display-0
-RUN grep -q '^sudo mkdir -p /tmp/.X11-unix$' /defaults/startwm_wayland.sh && \
-	grep -q '^sudo chmod 1777 /tmp/.X11-unix$' /defaults/startwm_wayland.sh && \
-	sed -i \
-		-e 's|^sudo mkdir -p /tmp/.X11-unix$|mkdir -p /tmp/.X11-unix|' \
-		-e 's|^sudo chmod 1777 /tmp/.X11-unix$|chmod 1777 /tmp/.X11-unix 2>/dev/null \|\| true|' \
-		/defaults/startwm_wayland.sh && \
-	! grep -q 'sudo.*X11-unix' /defaults/startwm_wayland.sh && \
-	bash -n /defaults/startwm_wayland.sh
 
 # Coder authenticates every request at its proxy, so the base's HTTP basic auth is a
 # second login for nothing, and the sed that enables it uncomments blindly. PASSWORD and

@@ -154,15 +154,12 @@ activated, so it enters clipit's history at that point rather than when it was c
 Firefox is an X11 client here, since `startwm_wayland.sh` exports `MOZ_ENABLE_WAYLAND=0`.
 
 Nothing in this session reads `/etc/xdg/autostart`.
-There is no plasma-session and no `systemd --user`, so the entry the package ships never
-fires, and neither do the base's own `kglobalacceld` and `xembedsniproxy` entries.
-clipit is backgrounded from the `bash -c` block in `startwm_wayland.sh` instead, beside
-the [lock screen helper](#the-kde-lock-screen), which is the only place the session bus,
-`DISPLAY` and `WAYLAND_DISPLAY` are all set.
+There is no plasma-session and no `systemd --user`, so the entry the package ships never fires.
+clipit is backgrounded from `start_session()` in `startwm_wayland.sh` instead, beside the [lock screen helper](#the-kde-lock-screen), which is the only place the session bus, `DISPLAY` and `WAYLAND_DISPLAY` are all set.
 
-Plasma's system tray renders StatusNotifierItems, and clipit's tray icon is XEmbed, so
-the startup script also runs `xembedsniproxy`.
-It waits for plasmashell to own `org.kde.StatusNotifierWatcher` first.
+Plasma's system tray renders StatusNotifierItems, and clipit's tray icon is XEmbed, so it needs `xembedsniproxy`.
+The base launches the proxy as soon as kwin's Wayland socket exists, before Xwayland accepts connections, and with no X server it aborts.
+The startup script starts it again once the X display answers and plasmashell owns `org.kde.StatusNotifierWatcher`, unless one is already running.
 The tray icon is the way into the history: clipit's global hotkeys are X11 key grabs and
 fire only while an X11 window has focus.
 
@@ -196,14 +193,10 @@ Both are the system-wide layer of the XDG search: a profile in `/config` and a
 Unlimited history is also unbounded disk in `~/.cache/konsole` for as long as a pane
 lives, which is the trade the feature is.
 
-Nothing in this session reads `~/.config/autostart`, so `kontinue install` writes an
-entry that never fires — the same gap that leaves [clipit](#clipboard-history-with-clipit)
-to `startwm_wayland.sh`, and kontinue is backgrounded from that same `bash -c` block.
-The block is redirected to `/dev/null`, so the startup script sends the watcher's log,
-which is its whole account of what it saved and restored, to
-`$XDG_STATE_HOME/kontinue/watch.log`.
-It also exports `WAYLAND_DISPLAY`, which the session does not: a restore launches Konsole
-from the watcher, and it inherits whatever the watcher has.
+kontinue is backgrounded from `start_session()`, beside [clipit](#clipboard-history-with-clipit), so a fresh `/config` gets a watcher with nothing to install.
+`start_session()` also runs the user's `~/.config/autostart`, so where `kontinue install` has written an entry the startup script exits and leaves the watcher to it.
+Two watchers would share one snapshot store and log, and both would restore into the same Konsole.
+The session is redirected to `/dev/null`, so the startup script sends the watcher's log, which is its whole account of what it saved and restored, to `$XDG_STATE_HOME/kontinue/watch.log`.
 
 **Leave Konsole's "run all windows in a single process" alone.** Konsole registers
 `org.kde.konsole-<pid>` per process, which is what kontinue discovers, and a
@@ -334,13 +327,9 @@ kwin, not ksmserver, that registers the `org.freedesktop.ScreenSaver` DBus servi
 with that flag the KDE lock screen does nothing. Dropping the flag makes kwin
 provide the locker.
 
-Locking once at session start has no ordinary path. plasmashell is launched directly
-inside a `dbus-run-session` from `startwm_wayland.sh`, so there is no
-startplasma/plasma-session (`~/.config/autostart` is never read) and no logind session
-(`loginctl lock-session` does not work). The only reliable route is the ScreenSaver DBus
-service driven from *inside* that session bus — hence a small helper backgrounded from
-the same `bash -c` block, just before plasmashell, where `DBUS_SESSION_BUS_ADDRESS` is
-set.
+Locking once at session start has no ordinary path.
+plasmashell is launched directly inside a `dbus-run-session` from `startwm_wayland.sh`, so there is no startplasma/plasma-session and no logind session (`loginctl lock-session` does not work).
+The only reliable route is the ScreenSaver DBus service driven from *inside* that session bus — hence a small helper backgrounded from `start_session()`, just before plasmashell, where `DBUS_SESSION_BUS_ADDRESS` is set.
 
 The helper honours `LOCK_ON_STARTUP` so a deployment that authenticates users ahead of
 the stream can turn it off at runtime.

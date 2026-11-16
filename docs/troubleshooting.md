@@ -398,10 +398,8 @@ ls -ld /tmp/.X11-unix      # missing = this bug
 pgrep -a Xwayland          # nothing = confirmed
 ```
 
-**Fix:** the `coder` stage drops the two `sudo` prefixes, so the session creates the
-directory itself. Without a rebuild, `mkdir -p /tmp/.X11-unix && chmod 1777
-/tmp/.X11-unix` in the pod followed by a restart of the desktop is the same thing, or
-launch Firefox with `MOZ_ENABLE_WAYLAND=1` to bypass X entirely.
+**Fix:** the pinned base creates the directory without `sudo`, and falls back to it only when that fails.
+On an image built from an older base, `mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix` in the pod followed by a restart of the desktop is the same thing, or launch Firefox with `MOZ_ENABLE_WAYLAND=1` to bypass X entirely.
 
 Leaving `MOZ_ENABLE_WAYLAND=0` alone is deliberate: X11 is the path the NVIDIA
 [EGL-on-X11 VAAPI wiring](image-design.md#firefox-egl-on-x11-then-vaapi) depends on, and
