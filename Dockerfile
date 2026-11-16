@@ -278,6 +278,14 @@ RUN DE_RUN=/etc/s6-overlay/s6-rc.d/svc-de/run && \
 	[ "$(grep -cF 'svc-selkies' "$DE_RUN")" = "4" ] && \
 	bash -n "$DE_RUN"
 
+# The base's system bus activates rtkit-daemon on demand, and in a privileged pod it can wedge,
+# so every realtime request waits out a 25 s D-Bus timeout and pulseaudio stalls the desktop's
+# start. Without activation the requests fail at once. docs/troubleshooting.md#the-desktop-takes-minutes-to-start-and-the-pod-restart-loops
+RUN f=/usr/share/dbus-1/system-services/org.freedesktop.RealtimeKit1.service && \
+	test -f "$f" && \
+	rm -f "$f" && \
+	test ! -e "$f"
+
 # clipit is a clipboard manager; nothing in this session reads /etc/xdg/autostart, so its
 # packaged autostart entry never fires. docs/image-design.md#clipboard-history-with-clipit
 ARG INSTALL_CLIPIT=true
@@ -627,7 +635,7 @@ ARG INSTALL_SSHD=true
 ARG SSHD_PORT=2222
 # The nested dockerd allocates bridge subnets inside this container's OWN netns, so its
 # stock 172.17-172.31 pool can land on the subnet the container itself sits on and shadow
-# its gateway. docs/troubleshooting.md#nested-dockerd-takes-the-containers-network-down
+# its gateway. docs/troubleshooting.md#the-nested-dockerd-takes-the-containers-network-down
 ARG DIND_ADDRESS_POOL=10.201.0.0/16
 ARG DIND_ADDRESS_POOL_SIZE=24
 # Runtime: a registry host[:port] served by a private CA, wired into the inner DinD's

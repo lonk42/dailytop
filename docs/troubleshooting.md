@@ -622,6 +622,36 @@ on the next browser reconnect, since capture only starts when a client sends
 
 ---
 
+## The desktop takes minutes to start, and the pod restart-loops
+
+**Symptom:** a privileged pod takes several minutes to bring up the stream, then the startup probe kills it and the cycle repeats.
+The log shows audio setup failing late, and selkies waiting on a compositor socket that appears only just before the restart:
+
+```
+[audio-setup] failed to create null sink 'output'
+[audio-setup] output.monitor missing after setup; audio capture will fail
+WARNING:server:Wayland compositor socket did not come up within its startup window
+```
+
+**Cause:** the base runs a system D-Bus, and rtkit's D-Bus activation file is installed with it.
+pulseaudio cannot raise its sink threads to realtime itself, so it asks RealtimeKit over that bus.
+The bus activates `rtkit-daemon`, and in a privileged pod the activated daemon can stop answering.
+Every request then waits out the 25 s D-Bus timeout while pulseaudio's main thread blocks on it, so each `pactl` call times out.
+Whether a start is hit is a race: a pulseaudio that starts before the bus exists fails its requests at once and comes up normally.
+
+**Check:**
+
+```bash
+time dbus-send --system --print-reply --dest=org.freedesktop.RealtimeKit1 \
+  /org/freedesktop/RealtimeKit1 org.freedesktop.DBus.Properties.Get \
+  string:org.freedesktop.RealtimeKit1 string:MaxRealtimePriority   # 25 s and NoReply = this bug
+```
+
+**Fix:** the image removes `/usr/share/dbus-1/system-services/org.freedesktop.RealtimeKit1.service`, so realtime requests fail at once and every client carries on at normal priority.
+On an image without the fix, a `/custom-cont-init.d` hook deleting that file does the same.
+
+---
+
 ## No icons anywhere, and every flatpak fails with `Permission denied`
 
 On a **fresh named volume** only. The menu has entries but none of them draw an icon, the
@@ -845,7 +875,7 @@ Wayland clients use `WAYLAND_DISPLAY=wayland-0` (kwin); pixelflux is `wayland-1`
 
 ## Upstream patches carried here, and when to delete them
 
-The `Dockerfile` carries two patches that are **workarounds for upstream bugs, not
+The `Dockerfile` carries three patches that are **workarounds for upstream bugs, not
 choices**. All are guarded so **the build fails once the bug is gone** — that failure
 is the removal signal, not a regression. Do not "fix" a guard failure by loosening the
 guard.
@@ -857,6 +887,7 @@ category — deliberate behaviour changes, and they stay.)
 |---|-------|-------|-------------|
 | 1 | audio sink setup replaced by `selkies-audio-setup` | `base` | upstream's block stops waiting on `/defaults/pid`, or follows `PULSE_RUNTIME_PATH` |
 | 2 | `svc-de` restarts selkies rather than joining a stale capture | `base` | `svc-de/run` checks the socket belongs to a selkies that has not already bound a session |
+| 3 | rtkit's D-Bus activation file removed | `base` | the base stops shipping a system bus, or an activated `rtkit-daemon` answers reliably in a privileged pod |
 
 ### 1. audio sink setup
 
@@ -901,6 +932,13 @@ If that count is **non-zero**, upstream has taken a view on the coupling: read w
 does before deleting this. Only drop the patch if a desktop restarting alone either
 restarts selkies or re-binds the capture — reconnecting to the socket is not enough, and
 is exactly the behaviour that fails.
+
+### 3. rtkit activation
+
+Full analysis: [the desktop takes minutes to start](#the-desktop-takes-minutes-to-start-and-the-pod-restart-loops).
+The guard requires the activation file to exist, so a base that stops shipping it fails the build.
+Not root-caused: run by hand as root in the same pod, `rtkit-daemon` answers in milliseconds, and so does a later activation once the bus has settled.
+Re-test before deleting the patch, in a privileged pod, by restoring the file and restarting the container several times.
 
 ### Bumping the base pin
 

@@ -17,8 +17,8 @@ maintainers:
 
 # Must equal the release tag; the release workflow refuses a tag that disagrees.
 # docs/releasing.md
-version: 2.1.0
+version: 2.1.1
 
 # The image release this chart defaults to, in the `<lsNNN>-<version>` form the immutable
 # image tags use. `image.variant` is prefixed to it to select a variant.
-appVersion: "ls305-2.1.0"
+appVersion: "ls305-2.1.1"

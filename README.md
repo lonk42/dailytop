@@ -221,6 +221,8 @@ one. They are documented so they can be dropped when upstream fixes them:
 - **No lock screen.** kwin is launched with `--no-lockscreen`, and on Plasma 6 Wayland
   kwin is what registers the ScreenSaver DBus service.
   [Detail](docs/image-design.md#the-kde-lock-screen)
+- **A privileged container can take minutes to start.** rtkit, activated on the base's system bus, can stop answering, and pulseaudio blocks on every realtime request.
+  [Detail](docs/troubleshooting.md#the-desktop-takes-minutes-to-start-and-the-pod-restart-loops)
 - **Flatpak apps missing from the KDE menu**, because the session is not a login shell.
   [Detail](docs/image-design.md#flatpak-apps-in-the-kde-menu)
 
