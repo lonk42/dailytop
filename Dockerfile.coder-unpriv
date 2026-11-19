@@ -1,0 +1,317 @@
+# syntax=docker/dockerfile:1
+
+#  1. Base image pin
+# Pinned, not rolling: the seds below match this exact base's scripts.
+# docs/image-design.md#the-base-pin
+ARG WEBTOP_BASE_IMAGE=lscr.io/linuxserver/webtop:fedora-kde-cbf8546c-ls305
+FROM ${WEBTOP_BASE_IMAGE}
+
+#  2. Packages
+# VS Code needs Microsoft's repo; everything else comes from Fedora's.
+RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc && \
+	printf '%s\n' \
+		'[code]' \
+		'name=Visual Studio Code' \
+		'baseurl=https://packages.microsoft.com/yumrepos/vscode' \
+		'enabled=1' \
+		'autorefresh=1' \
+		'type=rpm-md' \
+		'gpgcheck=1' \
+		'gpgkey=https://packages.microsoft.com/keys/microsoft.asc' \
+		> /etc/yum.repos.d/vscode.repo && \
+	dnf install -y dnf-plugins-core && \
+	dnf makecache && \
+	dnf install -y code vim git tmux htop rsync net-tools iproute firefox chromium sqlite \
+		sshfs spectacle unzip npm awscli2 dos2unix dejavu-fonts-all ripgrep figlet \
+		kolourpaint strace jq yq bind-utils iputils wget helm kubectl opentofu kustomize restic \
+		yakuake python3-dbus libadwaita uv && \
+	dnf clean all
+
+
+#  3. Pinned binaries -- Terraform, k9s, oc; amd64 only
+# Not packaged in Fedora, so fetched by version.
+# docs/image-design.md#terraform-and-k9s-use-curl-not-wget
+ARG TERRAFORM_VERSION=1.14.8
+ARG K9S_VERSION=0.51.0
+ARG OC_VERSION=4.22.6
+RUN curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+		-o /tmp/terraform.zip && \
+	unzip -q /tmp/terraform.zip -d /usr/local/bin && \
+	rm -f /tmp/terraform.zip /usr/local/bin/LICENSE.txt && \
+	curl -fsSL "https://github.com/derailed/k9s/releases/download/v${K9S_VERSION}/k9s_Linux_amd64.tar.gz" \
+		-o /tmp/k9s.tar.gz && \
+	tar -xzf /tmp/k9s.tar.gz -C /usr/local/bin k9s && \
+	rm -f /tmp/k9s.tar.gz && \
+	curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" \
+		-o /tmp/oc.tar.gz && \
+	tar -xzf /tmp/oc.tar.gz -C /usr/local/bin oc && \
+	rm -f /tmp/oc.tar.gz
+
+
+#  4. Login shells
+# abc/root ship with an empty shell field, which makes xterm warn and fall back.
+RUN usermod -s /bin/bash root && usermod -s /bin/bash abc
+
+
+#  5. Runtime CA trust -- hook 00-ca-certs.sh
+# Lets a deployment trust extra CAs without a rebuild; always exits 0, as a failing hook stops the container.
+# docs/image-design.md#extra-ca-trust
+RUN mkdir -p /custom-cont-init.d
+RUN cat > /custom-cont-init.d/00-ca-certs.sh <<'EOF'
+#!/usr/bin/with-contenv bash
+# The root filesystem is fresh each pod start, so nothing installed earlier needs revoking.
+shopt -s nullglob globstar
+certs=("${CA_CERT_DIR:-/certs}"/**/*.{crt,pem})
+[ ${#certs[@]} -gt 0 ] || exit 0
+if install -m 0644 -t /etc/pki/ca-trust/source/anchors "${certs[@]}" && update-ca-trust extract; then
+  echo "[custom-init] trusted ${#certs[@]} CA certificate(s)"
+else
+  echo "[custom-init] WARNING: mounted CAs are NOT trusted" >&2
+fi
+exit 0
+EOF
+RUN chmod 0755 /custom-cont-init.d/00-ca-certs.sh
+
+ENV CA_CERT_DIR=/certs
+
+
+#  6. Upstream session fixes
+
+# 6a. Audio sink setup
+# Upstream waits forever on a pidfile and latches a failed setup, losing audio for the container's life.
+# docs/troubleshooting.md#no-audio-the-output-sink-was-never-created
+RUN cat > /usr/local/bin/selkies-audio-setup <<'EOF'
+#!/usr/bin/with-contenv bash
+[ -f /dev/shm/audio.lock ] && exit 0
+pa() { s6-setuidgid abc pactl "$@" 2>/dev/null; }
+for i in $(seq 1 120); do pa info >/dev/null && break; sleep .5; done
+pa info >/dev/null || exit 0
+for sink in output input; do
+  pa list short sinks | cut -f2 | grep -qx "${sink}" || \
+    pa load-module module-null-sink sink_name="${sink}" sink_properties=device.description="${sink}" >/dev/null
+done
+if pa list short sources | cut -f2 | grep -qx output.monitor; then
+  pa set-default-sink output
+  touch /dev/shm/audio.lock
+fi
+exit 0
+EOF
+RUN chmod 0755 /usr/local/bin/selkies-audio-setup && \
+	SELKIES_RUN=/etc/s6-overlay/s6-rc.d/svc-selkies/run && \
+	grep -q '^# Default sink setup$' "$SELKIES_RUN" && \
+	grep -q 'until \[ -f /defaults/pid \]; do' "$SELKIES_RUN" && \
+	grep -q 'touch /dev/shm/audio.lock' "$SELKIES_RUN" && \
+	sed -i '/^# Default sink setup$/,/^fi$/c\/usr/local/bin/selkies-audio-setup' "$SELKIES_RUN"
+
+# 6b. Rebuild capture when the desktop restarts
+# selkies binds capture to one desktop session, so a restarted desktop streams nothing until selkies restarts too.
+# docs/troubleshooting.md#the-desktop-restarted-and-the-stream-never-came-back
+RUN cat > /tmp/de-capture-guard <<'EOF'
+  # selkies binds screen capture to the desktop session once, so a DE starting against a
+  # selkies that already served an earlier session reconnects but is never captured --
+  # the stream is dead while every service reports up. Rebuild the pair instead.
+  if [ -e "${SOCKET_PATH}" ] && \
+     [ "$(s6-svstat -o up /run/service/svc-selkies 2>/dev/null)" = "true" ] && \
+     [ "$(s6-svstat -o updownfor /run/service/svc-selkies 2>/dev/null || echo 0)" -gt 60 ]; then
+    echo "[svc-de] ${SOCKET_PATH} predates this session; restarting svc-selkies to rebuild capture"
+    s6-svc -r /run/service/svc-selkies
+    sleep 5
+    exit 1
+  fi
+EOF
+RUN DE_RUN=/etc/s6-overlay/s6-rc.d/svc-de/run && \
+	grep -qF 'SOCKET_PATH="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-1}"' "$DE_RUN" && \
+	grep -qF 'while [ ! -e "${SOCKET_PATH}" ]; do' "$DE_RUN" && \
+	! grep -qF 'svc-selkies' "$DE_RUN" && \
+	sed -i '/^  SOCKET_PATH=/r /tmp/de-capture-guard' "$DE_RUN" && \
+	rm -f /tmp/de-capture-guard
+
+# 6c. No rtkit activation
+# An activated rtkit can wedge, stalling pulseaudio and the desktop's start for minutes.
+# docs/troubleshooting.md#the-desktop-takes-minutes-to-start-and-the-pod-restart-loops
+RUN rm /usr/share/dbus-1/system-services/org.freedesktop.RealtimeKit1.service
+
+
+#  7. Coder agent
+# No Docker here, and a restart-looping svc-docker stacks tmpfs over /tmp, where the agent keeps its binary.
+# docs/troubleshooting.md#svc-docker-restart-loop-stacks-tmpfs-on-tmp
+RUN rm -f /etc/s6-overlay/s6-rc.d/user/contents.d/svc-docker
+
+# s6 is PID 1 and owns the session, so the agent runs as a service rather than the entrypoint.
+# docs/image-design.md#the-agent-is-a-service-not-the-entrypoint
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/svc-coder-agent/dependencies.d && \
+	echo longrun > /etc/s6-overlay/s6-rc.d/svc-coder-agent/type && \
+	touch /etc/s6-overlay/s6-rc.d/svc-coder-agent/dependencies.d/init-services
+
+# The init script arrives base64-encoded because s6 truncates env values at the first newline.
+# docs/image-design.md#the-init-script-must-be-base64
+RUN cat > /etc/s6-overlay/s6-rc.d/svc-coder-agent/run <<'EOF'
+#!/command/with-contenv bash
+INIT=/run/coder-agent-init.sh
+
+park() {
+  echo "[svc-coder-agent] $1" >&2
+  echo "[svc-coder-agent] parking; exiting here would s6 restart-loop this service" >&2
+  exec sleep infinity
+}
+
+[ -n "${CODER_AGENT_TOKEN}" ] || park "CODER_AGENT_TOKEN unset -- not starting agent"
+[ -n "${CODER_AGENT_INIT_SCRIPT_B64}" ] || park "CODER_AGENT_INIT_SCRIPT_B64 unset -- not starting agent"
+
+printf '%s' "${CODER_AGENT_INIT_SCRIPT_B64}" | base64 -d > "$INIT" \
+  || park "could not base64-decode CODER_AGENT_INIT_SCRIPT_B64"
+[ -s "$INIT" ] || park "decoded init script is empty"
+chmod 0755 "$INIT"
+
+# Mirrors the s6-setuidgid shim: as root the agent becomes abc, otherwise it is already us.
+if [ "$(id -u)" = "0" ]; then
+  agent_user=abc
+else
+  agent_user="$(id -un 2>/dev/null || id -u)"
+fi
+
+echo "[svc-coder-agent] starting Coder agent as ${agent_user} (HOME=/config)"
+exec s6-setuidgid abc env \
+  HOME=/config \
+  USER="${agent_user}" \
+  SHELL=/bin/bash \
+  XDG_RUNTIME_DIR=/config/.XDG \
+  DISPLAY=:0 \
+  WAYLAND_DISPLAY=wayland-0 \
+  "$INIT"
+EOF
+RUN chmod +x /etc/s6-overlay/s6-rc.d/svc-coder-agent/run && \
+	touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-coder-agent
+
+
+#  8. Software rendering and encode (GPU-less)
+# No GPU, so CPU encode is baked in; SELKIES_USE_CPU must be "true|locked", as a bare "locked" inverts it.
+# docs/image-design.md#cpu-encode-is-baked-in
+ENV SELKIES_ENCODER=x264enc-striped,jpeg
+ENV SELKIES_USE_CPU=true|locked
+
+# Stops the compositor probing a driverless /dev/dri, which blanks the desktop; unset reads as true.
+# docs/image-design.md#neutralising-the-gpu-autodetect
+ENV SELKIES_AUTO_GPU=false
+ENV AUTO_GPU=false
+ENV LIBGL_ALWAYS_SOFTWARE=1
+
+
+#  9. Chromium and VS Code sandbox
+# Chromium and Electron cannot sandbox under seccomp without setuid, so they drop it only when a filter is active.
+# docs/unprivileged.md#chromium-and-vs-code
+RUN grep -q 'CHROMIUM_FLAGS' /etc/chromium/chromium.conf && \
+	cat >> /etc/chromium/chromium.conf <<'EOF'
+
+# Under a seccomp filter no sandbox is available here.
+grep -q 'Seccomp:.0' /proc/1/status || CHROMIUM_FLAGS+=" --no-sandbox --test-type"
+EOF
+
+RUN cat > /usr/local/bin/code <<'EOF'
+#!/bin/bash
+BIN=/usr/share/code/bin/code
+if grep -q 'Seccomp:.0' /proc/1/status; then
+  exec "$BIN" "$@"
+fi
+exec "$BIN" --no-sandbox "$@"
+EOF
+RUN chmod 0755 /usr/local/bin/code && \
+	for f in /usr/share/applications/com.microsoft.VSCode.desktop /usr/share/applications/com.microsoft.VSCode.UrlHandler.desktop; do \
+		grep -q '^Exec=/usr/share/code/code' "$f" && \
+		sed -i 's|^Exec=/usr/share/code/code|Exec=/usr/local/bin/code|' "$f" || exit 1; \
+	done
+
+
+# 10. nginx
+
+# 10a. No HTTP basic auth
+# Coder already authenticates at its proxy, so basic auth would be a second login.
+# docs/image-design.md#no-http-basic-auth
+RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
+	grep -q 'if \[ -n "\${PASSWORD}" \]; then' "$NGINX_INIT" && \
+	grep -q 'CUSER="\${CUSTOM_USER:-abc}"' "$NGINX_INIT" && \
+	sed -i \
+		-e '/if \[ -n "\${PASSWORD}" \]; then/,/^fi$/d' \
+		-e '/CUSER="\${CUSTOM_USER:-abc}"/d' \
+		"$NGINX_INIT" && \
+	[ "$(grep -c auth_basic /defaults/default.conf)" = "4" ] && \
+	sed -i '/auth_basic/d' /defaults/default.conf
+
+# 10b. TLS material in /run, not /config
+# A key left in /config by another uid is unreadable, and nginx failing takes the desktop down.
+# docs/image-design.md#tls-material-lives-in-run
+RUN NGINX_INIT=/etc/s6-overlay/s6-rc.d/init-nginx/run && \
+	grep -q 'if \[ ! -f "/config/ssl/cert.pem" \]; then' "$NGINX_INIT" && \
+	[ "$(grep -c /config/ssl "$NGINX_INIT")" = "6" ] && \
+	[ "$(grep -c /config/ssl /defaults/default.conf)" = "2" ] && \
+	sed -i 's|/config/ssl|/run/ssl|g' "$NGINX_INIT" /defaults/default.conf
+
+# 10c. Drop Fedora's stock :80 server
+# Nothing routes to it, and a non-root uid cannot bind :80 where unprivileged ports start at 1024.
+# docs/image-design.md#the-stock-80-server-block
+RUN [ "$(grep -c '^    server {$' /etc/nginx/nginx.conf)" = "1" ] && \
+	grep -q 'listen       80;' /etc/nginx/nginx.conf && \
+	sed -i '/^    server {$/,/^    }$/d' /etc/nginx/nginx.conf
+
+# 10d. Non-root nginx master
+# A non-root master cannot switch user, and /run belongs to the deployment, not the image.
+# docs/unprivileged.md#nginx-as-a-non-root-master
+RUN grep -q '^user nginx;$' /etc/nginx/nginx.conf && \
+	grep -q '^pid /run/nginx.pid;$' /etc/nginx/nginx.conf && \
+	sed -i \
+		-e '/^user nginx;$/d' \
+		-e 's|^pid /run/nginx.pid;$|pid /var/lib/nginx/nginx.pid;|' \
+		/etc/nginx/nginx.conf
+
+
+# 11. Unprivileged runtime
+
+# 11a. s6-setuidgid shim
+# s6-setuidgid calls setgroups(), which fails without CAP_SETGID and restart-loops every service using it.
+# docs/unprivileged.md#no-capabilities-are-needed
+RUN cat > /usr/local/bin/s6-setuidgid-unpriv <<'EOF'
+#!/bin/bash
+# Already the target user, so dropping privileges is a no-op: drop the username and exec.
+if [ "$(id -u)" != "0" ]; then
+  shift
+  exec "$@"
+fi
+exec /package/admin/s6/command/s6-setuidgid "$@"
+EOF
+
+# 11b. passwd entry for the runtime uid
+# An arbitrary uid has no passwd entry, and getpwuid() failures surface obscurely; UNPRIV_USERNAME names it.
+# docs/unprivileged.md#naming-the-runtime-user
+RUN cat > /custom-cont-init.d/05-unpriv-passwd.sh <<'EOF'
+#!/bin/bash
+name="${UNPRIV_USERNAME:-abc-unpriv}"
+# Must be a valid user name (it lands in a colon-separated field) and not already taken.
+{ [[ "${name}" =~ ^[a-z_][a-z0-9_-]*$ ]] && ! getent passwd "${name}" >/dev/null; } || name=abc-unpriv
+getent passwd "$(id -u)" >/dev/null || \
+  printf '%s:x:%s:%s:container user:/config:/bin/bash\n' "${name}" "$(id -u)" "$(id -g)" >> /etc/passwd
+exit 0
+EOF
+
+# 11c. Exec bits and group-root permissions
+# The init scripts write these paths at runtime, so any uid in gid 0 needs group write; extend the list for a new "Permission denied".
+# docs/unprivileged.md#what-the-image-changes
+ARG UNPRIVILEGED_PATHS="/etc/nginx /usr/share/selkies /etc/glvnd/egl_vendor.d \
+/etc/vulkan/icd.d /etc/pki/ca-trust/source/anchors /etc/pki/ca-trust/extracted \
+/var/lib/nginx /var/log/nginx /defaults /app /etc/passwd /etc/group"
+RUN chmod 0755 /usr/local/bin/s6-setuidgid-unpriv /custom-cont-init.d/05-unpriv-passwd.sh && \
+	[ "$(readlink /command/s6-setuidgid)" = "../package/admin/s6/command/s6-setuidgid" ] && \
+	ln -sf /usr/local/bin/s6-setuidgid-unpriv /command/s6-setuidgid && \
+	chmod 0755 /usr/sbin/lsiown /docker-mods && \
+	find /etc/s6-overlay/s6-rc.d -name run -type f ! -perm -o+x -exec chmod 0755 {} + && \
+	chgrp -R 0 ${UNPRIVILEGED_PATHS} && \
+	chmod -R g=u ${UNPRIVILEGED_PATHS}
+
+
+# 12. Final cleanup
+# Docker seeds a fresh named volume from the image's /config, and root-owned files there break the session.
+# docs/troubleshooting.md#no-icons-anywhere-and-every-flatpak-fails-with-permission-denied
+RUN find /config -mindepth 1 -maxdepth 1 ! -user abc -exec rm -rf {} +
+
+# A k8s emptyDir on /run is world-writable, which s6 preinit refuses without this.
+# docs/unprivileged.md#what-the-deployment-must-supply
+ENV S6_YES_I_WANT_A_WORLD_WRITABLE_RUN_BECAUSE_KUBERNETES=1
